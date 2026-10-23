@@ -52,13 +52,25 @@ private final class DeviceIO {
     private let lock = NSLock()
     private var failingReads = false
     private var writes = 0
+    private var failingNextWrite = false
     init(fd: Int32) { self.fd = fd }
     var failReads: Bool {
         get { lock.withLock { failingReads } }
         set { lock.withLock { failingReads = newValue } }
     }
+    var failNextWrite: Bool {
+        get { lock.withLock { failingNextWrite } }
+        set { lock.withLock { failingNextWrite = newValue } }
+    }
     var writeCount: Int { lock.withLock { writes } }
-    func recordWrite() { lock.withLock { writes += 1 } }
+    func beginWrite() -> Bool {
+        lock.withLock {
+            writes += 1
+            let fail = failingNextWrite
+            failingNextWrite = false
+            return fail
+        }
+    }
 }
 
 private final class Image {
@@ -91,7 +103,7 @@ private final class Image {
             return 0
         }, write: { ctx, off, buf, len in
             let io = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue()
-            io.recordWrite()
+            if io.beginWrite() { return EIO }
             let fd = io.fd
             var done = 0
             while done < len {
@@ -357,6 +369,62 @@ struct BridgeConformanceTests {
         #expect(got == 0)
         #expect(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64.max, &byte, 0) == EFBIG)
     }
+    private func poisonFreeClusters(_ mounted: Mounted) throws -> Int {
+        let bitmap = try mounted.read(mounted.lookup("/$Bitmap"))
+        var boot = [UInt8](repeating: 0, count: 512)
+        try #require(pread(mounted.image.fd, &boot, boot.count, 0) == boot.count)
+        let sector = Int(boot[11]) | Int(boot[12]) << 8
+        let cluster = sector * Int(boot[13])
+        let poison = Data(repeating: 0xcc, count: cluster)
+        let clusters = Int(mounted.image.dev.size) / cluster
+        for index in 0..<min(clusters, bitmap.count * 8) where bitmap[index / 8] & (1 << (index % 8)) == 0 {
+            try #require(poison.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(index * cluster)) } == cluster)
+        }
+        return cluster
+    }
+
+    @Test(arguments: Engine.allCases) func failedSparseInitializationRestoresHole(engine: Engine) throws {
+        let mounted = try Mounted(engine, "basic-512", write: true)
+        let name = Array("rollback.bin".utf16)
+        var attr = nb_attr()
+        try #require(name.withUnsafeBufferPointer { mounted.api.nb_create!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, NB_FILE, &attr) } == 0)
+        let fileSize = 65536
+        try #require(mounted.api.nb_truncate!(mounted.volume, attr.ref, UInt64(fileSize)) == 0)
+        var marker: UInt8 = 0x7c
+        try #require(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64(fileSize - 1), &marker, 1) == 0)
+        try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+        let cluster = try poisonFreeClusters(mounted)
+        let offset = cluster + 17
+        let payload = Data(repeating: 0x6a, count: 23)
+        var extent = nb_extent()
+        var count = 0
+        mounted.image.io.failNextWrite = true
+        #expect(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == EIO)
+        try #require(!mounted.image.io.failNextWrite, "The bridge's zero-fill write must consume the injected failure")
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(cluster), UInt64(cluster), 0, &extent, 1, &count) == 0)
+        try #require(count == 1)
+        #expect(extent.kind == NB_EXT_HOLE)
+        var expected = Data(count: fileSize)
+        expected[fileSize - 1] = marker
+        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
+        try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+        try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
+        mounted.volume = nil
+        try #require(mounted.api.nb_mount!(&mounted.image.dev, 1, &mounted.volume) == 0)
+        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
+        #expect(try tool("ntfscat", [mounted.image.url.path, "/rollback.bin"]) == expected)
+        // Restored device I/O and a retry must be able to materialize safely.
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == 0)
+        try #require(payload.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
+        try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 0, 1) == 0)
+        expected.replaceSubrange(offset..<(offset + payload.count), with: payload)
+        try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
+        mounted.volume = nil
+        try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
+        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
+        #expect(try tool("ntfscat", [mounted.image.url.path, "/rollback.bin"]) == expected)
+    }
+
     @Test(arguments: Engine.allCases) func materializedSparseHolePreservesZeroEdges(engine: Engine) throws {
         for completed in [false, true] {
             let mounted = try Mounted(engine, "basic-512", write: true)
@@ -370,16 +438,7 @@ struct BridgeConformanceTests {
             try #require(mounted.api.nb_sync!(mounted.volume) == 0)
             // Poison every reusable cluster, not just a cluster the allocator
             // might choose. The allocated bitmap and metadata are left intact.
-            let bitmap = try mounted.read(mounted.lookup("/$Bitmap"))
-            var boot = [UInt8](repeating: 0, count: 512)
-            try #require(pread(mounted.image.fd, &boot, boot.count, 0) == boot.count)
-            let sector = Int(boot[11]) | Int(boot[12]) << 8
-            let cluster = sector * Int(boot[13])
-            let poison = Data(repeating: 0xcc, count: cluster)
-            let clusters = Int(mounted.image.dev.size) / cluster
-            for index in 0..<min(clusters, bitmap.count * 8) where bitmap[index / 8] & (1 << (index % 8)) == 0 {
-                try #require(poison.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(index * cluster)) } == cluster)
-            }
+            let cluster = try poisonFreeClusters(mounted)
             let offset = cluster + 17
             let payload = Data(repeating: 0x6a, count: 23)
             var extent = nb_extent()

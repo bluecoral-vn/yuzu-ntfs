@@ -89,7 +89,21 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len)
         uint64_t last = min_t(uint64_t, old_init, (uint64_t)(vcn + count) * cluster);
         if (allocated && first < last) {
             err = zero_gap(ni, first, last);
-            if (err) break;
+            if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
+            if (err) {
+                /* TT installs the run/mapping pairs during allocation. Restore
+                 * the original hole, not an allocated-but-uninitialized run:
+                 * a retry must still take the initialization path. */
+                mutex_lock(&ni->mrec_lock);
+                int rollback = ntfs_non_resident_attr_punch_hole(ni, vcn, count);
+                mutex_unlock(&ni->mrec_lock);
+                if (rollback) {
+                    NVolSetErrors(ni->vol);
+                    ntfs_error(vi->i_sb, "Cannot restore sparse hole after failed initialization (inode %llu, error %d).", ni->mft_no, rollback);
+                    err = -EIO;
+                }
+                break;
+            }
         }
         vcn += count;
     }

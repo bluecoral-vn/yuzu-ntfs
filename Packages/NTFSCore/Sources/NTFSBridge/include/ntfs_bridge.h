@@ -54,6 +54,9 @@ int nb_sync(nb_volume *v);
  *   their portion BELOW the existing initialized_size before returning a
  *   mapping, including payload bytes, so an abandoned/failed raw write cannot
  *   expose recycled disk contents. Beyond-VDL payload is not pre-zeroed.
+ *   Zeroing is flushed before success. If zeroing/flush fails, restore the
+ *   original hole and release its new allocation; failed restoration reports
+ *   EIO and enters the core's read-only error path.
  * - Read mapping never allocates: holes are NB_EXT_HOLE; allocated bytes in
  *   [initialized_size, size) are NB_EXT_UNINIT and MUST be zero-filled by caller.
  * - Successful write completion raises initialized_size and size to their
