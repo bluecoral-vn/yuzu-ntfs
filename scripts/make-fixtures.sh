@@ -6,24 +6,30 @@ cd "$ROOT"
 export LC_ALL=en_US.UTF-8
 scripts/fetch-ntfsprogs.sh
 SOURCE="$ROOT/vendor/ntfs-3g_ntfsprogs-2022.10.3"
+BUILD="$ROOT/vendor/build/ntfs-3g-2022.10.3"
 xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations \
-    -I "$SOURCE" -I "$SOURCE/include/ntfs-3g" \
-    tools/fixturegen/main.c "$SOURCE/libntfs-3g/.libs/libntfs-3g.a" \
+    -I "$BUILD" -I "$SOURCE/include/ntfs-3g" \
+    tools/fixturegen/main.c "$BUILD/libntfs-3g/.libs/libntfs-3g.a" \
     -framework CoreFoundation -o tools/bin/fixturegen
 mkdir -p fixtures
 # Changes to authoring code invalidate the cache. Checksums also reject images
 # modified by driver tests or VM chkdsk; never reuse such images as ground truth.
 SIGNATURE="$(shasum -a 256 scripts/make-fixtures.sh scripts/fetch-ntfsprogs.sh tools/fixturegen/main.c | shasum -a 256 | cut -d ' ' -f 1)"
-STAMP="fixtures/.generated-$SIGNATURE"
-if [[ -f "$STAMP" && -f fixtures/.checksums.sha256 ]] && \
-    shasum -a 256 -c fixtures/.checksums.sha256; then
+CACHE="fixtures/.generation-cache"
+if [[ -f "$CACHE" ]] && {
+    IFS= read -r cached_signature
+    [[ "$cached_signature" == "$SIGNATURE" ]] && shasum -a 256 -c -
+} < "$CACHE"; then
     echo "Fixture corpus unchanged; reusing verified images"
     scripts/check-fixtures.py
     exit 0
 fi
+# Invalidate before replacing any corpus member. Publish fingerprint and
+# checksums together only after every image and independent check succeeds.
+rm -f "$CACHE"
 TEMP_IMAGE=""
 TEMP_MANIFEST=""
-trap 'rm -f "$TEMP_IMAGE" "$TEMP_MANIFEST"' EXIT
+trap 'rm -f "$TEMP_IMAGE" "$TEMP_MANIFEST" "$CACHE.incomplete"' EXIT
 make_image() {
     local name="$1" size="$2" sector="$3" cluster="$4" mode="$5"
     TEMP_IMAGE="fixtures/$name.img.incomplete"
@@ -43,6 +49,9 @@ make_image c64k 256m 512 65536 basic
 make_image bigdir 512m 512 4096 bigdir
 make_image names 256m 512 4096 names
 scripts/check-fixtures.py
-shasum -a 256 fixtures/*.img fixtures/*.manifest.json > fixtures/.checksums.sha256
-touch "$STAMP"
+{
+    printf '%s\n' "$SIGNATURE"
+    shasum -a 256 fixtures/*.img fixtures/*.manifest.json
+} > "$CACHE.incomplete"
+mv "$CACHE.incomplete" "$CACHE"
 echo "Five offline NTFS fixtures and manifests ready"
