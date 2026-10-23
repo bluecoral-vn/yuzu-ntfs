@@ -4,9 +4,9 @@ Yuzu NTFS **0.1 Beta** is an independent, GPL-2.0-only NTFS driver and menu-bar 
 
 ## Current platform spike
 
-The app shows “Yuzu NTFS 0.1 Beta” and Quit in a menu-bar extra. Its embedded FSKit module deliberately recognizes no resources and refuses to load volumes with `ENOTSUP`. **This is not yet a usable NTFS driver.** Do not attach valuable data to experimental driver builds.
+The app shows “Yuzu NTFS 0.1 Beta” and Quit in a menu-bar extra. Its embedded FSKit module probes NTFS boot sectors, including 4Kn resources, using the `NTFSProbe` library; recognized volumes use the name “NTFS” and a stable serial-derived UUID. Loading volumes still returns `ENOTSUP`. **This is not yet a usable NTFS driver.** Do not attach valuable data to experimental driver builds.
 
-Identifiers: app `com.bluecoral.vn.yuzuntfs`, module `com.bluecoral.vn.yuzuntfs.fsmodule`, FS short name `yuzuntfs`; Apple team `37PX6W22C5`. Version `0.1.0`, build `1`; Swift 6 strict concurrency. `Packages/NTFSCore` is an intentionally empty SwiftPM package, ready for the probe and C engine targets in subsequent tasks. It builds without a dummy target.
+Identifiers: app `com.bluecoral.vn.yuzuntfs`, module `com.bluecoral.vn.yuzuntfs.fsmodule`, FS short name `yuzuntfs`; Apple team `37PX6W22C5`. Version `0.1.0`, build `1`; Swift 6 strict concurrency. `Packages/NTFSCore` contains the `NTFSProbe` library and Swift Testing parser tests; the C engine is deferred.
 
 ## Build
 
@@ -17,6 +17,8 @@ xcodegen generate
 xcodebuild -scheme YuzuNTFS -configuration Debug -derivedDataPath build build
 swift build --package-path Packages/NTFSCore
 ```
+
+After generating the offline fixtures below, run `swift test --package-path Packages/NTFSCore`; repeat with `--sanitize=address` and `--sanitize=undefined` for sanitizer checks. Missing fixture images fail with instructions to run `scripts/make-fixtures.sh`, rather than skipping coverage.
 
 The result is `build/Build/Products/Debug/YuzuNTFS.app`, containing `Contents/Extensions/YuzuNTFSModule.appex`. Debug explicitly ad-hoc signs the module with its FSKit and sandbox entitlements: Xcode's normal signing path requires a provisioning profile even with identity `-`. This verifies packaging only, **not OS approval or extension loading**. Provisioned signing and runtime mounting are later spike tasks; no SIP/security changes are needed or recommended here. Release signing is not configured for distribution.
 

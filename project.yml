@@ -24,6 +24,9 @@ settings:
       ONLY_ACTIVE_ARCH: YES
     Release:
       ONLY_ACTIVE_ARCH: NO
+packages:
+  NTFSCore:
+    path: Packages/NTFSCore
 targets:
   YuzuNTFS:
     type: application
@@ -73,6 +76,8 @@ targets:
           fi
         basedOnDependencyAnalysis: false
     dependencies:
+      - package: NTFSCore
+        product: NTFSProbe
       - sdk: FSKit.framework
       - sdk: ExtensionFoundation.framework
 schemes:

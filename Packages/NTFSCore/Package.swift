@@ -5,6 +5,9 @@ import PackageDescription
 let package = Package(
     name: "NTFSCore",
     platforms: [.macOS("26.0")],
-    products: [],
-    targets: []
+    products: [.library(name: "NTFSProbe", targets: ["NTFSProbe"])],
+    targets: [
+        .target(name: "NTFSProbe"),
+        .testTarget(name: "NTFSProbeTests", dependencies: ["NTFSProbe"])
+    ]
 )
