@@ -22,6 +22,37 @@ P0 does not build E1 or add `.e1` to `Engine.allCases`. E2 will be selected prov
 
 Commands ran from repository root on macOS/arm64 with the existing TT platform headers. These are syntax probes, not a linked engine or conformance RED/GREEN.
 
+### Execution environment
+
+Identification was recorded on 2026-10-24 during review fix round 1, on the same host used for the original probes; these identification commands do not rerun either probe.
+
+```sh
+sw_vers
+uname -m
+sysctl -n machdep.cpu.brand_string hw.model
+xcodebuild -version
+clang --version
+```
+
+Output, in command order:
+
+```text
+ProductName:        macOS
+ProductVersion:     27.0.1
+BuildVersion:       26A434
+arm64
+Apple M5 Max
+Mac17,7
+Xcode 27.1
+Build version 27A9275
+Apple clang version 21.0.0 (clang-2100.3.34.2)
+Target: arm64-apple-darwin27.0.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+```
+
+`sysctl` reports the CPU brand first and hardware model second. The probes used `xcrun clang`; the installed compiler directory above identifies the selected Xcode toolchain.
+
 ### Probe 1: unchanged platform
 
 ```sh
