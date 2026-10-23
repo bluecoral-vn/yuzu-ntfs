@@ -60,9 +60,17 @@ private func patch(_ bytes: [UInt8], offset: Int, value: UInt64, count: Int = 1)
 }
 @Test func parsesNegativeClusterShift() throws {
     let bytes = try fixtureSector("basic-512.img")
-    let bs = try parse(patch(bytes, offset: 13, value: UInt64(UInt8(bitPattern: -12))))
-    #expect(bs.clusterSize == 4096)
-    #expect(bs.sectorsPerCluster == 8)
+    // Keep the mirror inside the smaller cluster-count address space.
+    let geometry = patch(bytes, offset: 56, value: 1, count: 8)
+    let bs = try parse(patch(geometry, offset: 13, value: UInt64(UInt8(bitPattern: -12))))
+    #expect(bs.clusterSize == 2 * 1024 * 1024)
+    #expect(bs.sectorsPerCluster == 4096)
+}
+@Test func rejects4KnExtendedClusterOver2MiB() throws {
+    let bytes = try fixtureSector("4kn.img")
+    #expect(throws: NTFSProbeError.self) {
+        try parse(patch(bytes, offset: 13, value: UInt64(UInt8(bitPattern: -12))))
+    }
 }
 @Test(arguments: [0, 3, 0x81, 0xf3]) func rejectsInvalidClusterEncoding(_ v: UInt64) throws {
     let bytes = try fixtureSector("basic-512.img")

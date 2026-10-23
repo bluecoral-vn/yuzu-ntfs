@@ -40,11 +40,12 @@ public struct NTFSBootSector: Sendable {
             guard sectors > 0, sectors.nonzeroBitCount == 1 else { throw .invalidGeometry("Invalid sectors per cluster") }
             cluster = bps * sectors
         } else {
-            // NTFS extended encoding 0xF4...0xFF denotes byte sizes 2^12...2^1.
+            // NTFS extended encoding denotes sector counts 2^12...2^1, not byte sizes.
             guard encodedCluster >= -12, encodedCluster < 0 else {
                 throw .invalidGeometry("Invalid signed cluster-size encoding")
             }
-            cluster = UInt32(1) << UInt32(-Int(encodedCluster))
+            let sectors = UInt32(1) << UInt32(-Int(encodedCluster))
+            cluster = sectors * bps
         }
         guard cluster >= bps, cluster <= 2 * 1024 * 1024, cluster % bps == 0 else {
             throw .invalidGeometry("Cluster size outside supported sector-aligned range")
