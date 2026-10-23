@@ -167,6 +167,109 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
+    @Test(arguments: Engine.allCases) func newFilesAndShrunkFilesAcceptKOIOWrites(engine: Engine) throws {
+        let m = try Mounted(engine, "basic-512", write: true)
+        let root = m.api.nb_root_ref!(m.volume), name = Array("koio-new".utf16)
+        var a = nb_attr()
+        try #require(m.api.nb_create!(m.volume, root, name, name.count, UInt32(NB_FILE), &a) == 0)
+        #expect(a.flags & UInt32(NB_RESIDENT) == 0)
+        try #require(m.api.nb_truncate!(m.volume, a.ref, 4096) == 0)
+        try #require(m.api.nb_truncate!(m.volume, a.ref, 0) == 0)
+        try #require(m.api.nb_getattr!(m.volume, a.ref, root, &a) == 0)
+        #expect(a.size == 0)
+        var extents = [nb_extent](repeating: nb_extent(), count: 4), count = 0
+        #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, 1000003, 1, &extents, 4, &count) == 0)
+        #expect(count > 0)
+        let payload = Data(repeating: 0x5a, count: 1000003)
+        for e in extents.prefix(count) {
+            let begin = Int(e.logical), size = min(Int(e.length), payload.count - begin)
+            if size > 0 {
+                let wrote = payload.withUnsafeBytes { pwrite(m.image.fd, $0.baseAddress!.advanced(by: begin), size, off_t(e.physical)) }
+                try #require(wrote == size)
+            }
+        }
+        try #require(m.api.nb_complete_io!(m.volume, a.ref, 0, UInt64(payload.count), 0, 1) == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        #expect(try m.read(m.lookup("koio-new")) == payload)
+    }
+
+    @Test(arguments: Engine.allCases) func residentMappingPromotesWithoutLosingBytes(engine: Engine) throws {
+        let m = try Mounted(engine, "basic-512", write: true)
+        let a = try m.lookup("resident.txt"), before = try m.read(a)
+        var extents = [nb_extent](repeating: nb_extent(), count: 4), count = 0
+        // RW read mapping also promotes, without changing EOF or payload.
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, 0, a.size, 0, &extents, 4, &count) == 0)
+        try #require(m.api.nb_sync!(m.volume) == 0)
+        let info = String(decoding: try tool("ntfsinfo", ["-f", "-m", m.image.url.path]), as: UTF8.self)
+        let flags = info.split(separator: "\n").first { $0.contains("Volume Flags:") }
+        // TT's ntfs_sync_fs clears the dirty flag at a successful checkpoint.
+        #expect(flags?.contains("0x0000") == true)
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, a.size, 7, 1, &extents, 4, &count) == 0)
+        let marker = Data(repeating: 0xa5, count: 7)
+        try #require(count == 1)
+        try #require(marker.withUnsafeBytes { pwrite(m.image.fd, $0.baseAddress, 7, off_t(extents[0].physical)) } == 7)
+        try #require(m.api.nb_complete_io!(m.volume, a.ref, a.size, 7, 0, 1) == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        let persisted = try m.lookup("resident.txt")
+        #expect(try m.read(persisted) == before + marker)
+        #expect(try tool("ntfscat", [m.image.url.path, "/resident.txt"]) == before + marker)
+    }
+
+    @Test(arguments: Engine.allCases) func readOnlyResidentMappingNeverConverts(engine: Engine) throws {
+        let m = try Mounted(engine, "basic-512")
+        var a = try m.lookup("resident.txt"), extent = nb_extent(), count = 0
+        #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, a.size, 0, &extent, 1, &count) == ENOTSUP)
+        #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, a.size, 1, &extent, 1, &count) == EROFS)
+        try #require(m.api.nb_getattr!(m.volume, a.ref, a.parent_ref, &a) == 0)
+        #expect(a.flags & UInt32(NB_RESIDENT) != 0)
+        #expect(m.image.io.writeCount == 0)
+    }
+
+    @Test(arguments: Engine.allCases) func volumeMetadataOperationsPersist(engine: Engine) throws {
+        let m = try Mounted(engine, "basic-512", write: true)
+        let getattr = try #require(m.api.nb_getattr)
+        let remove = try #require(m.api.nb_remove)
+        let statfs = try #require(m.api.nb_statfs)
+        let setattr = try #require(m.api.nb_setattr)
+        let rename = try #require(m.api.nb_rename)
+        let root = m.api.nb_root_ref!(m.volume)
+        var stats = nb_stat()
+        try #require(statfs(m.volume, &stats) == 0)
+        #expect(stats.free_blocks < stats.total_blocks)
+        #expect(stats.block_size == 4096)
+        var directory = nb_attr(), file = nb_attr()
+        let dirname = Array("t7-dir".utf16), old = Array("old".utf16), new = Array("new".utf16)
+        try #require(m.api.nb_create!(m.volume, root, dirname, dirname.count, UInt32(NB_DIR), &directory) == 0)
+        try #require(m.api.nb_create!(m.volume, directory.ref, old, old.count, UInt32(NB_FILE), &file) == 0)
+        #expect(remove(m.volume, root, dirname, dirname.count) == ENOTEMPTY)
+        file.size = 1003
+        file.mtime = 133_000_000_001_234_500
+        try #require(setattr(m.volume, file.ref, &file, UInt32(NB_SET_SIZE | NB_SET_MTIME)) == 0)
+        try #require(rename(m.volume, directory.ref, old, old.count, directory.ref, new, new.count) == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0)
+        m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 1, &m.volume) == 0)
+        let persisted = try m.lookup("t7-dir/new")
+        var fetched = nb_attr()
+        try #require(getattr(m.volume, persisted.ref, directory.ref, &fetched) == 0)
+        #expect(fetched.size == 1003)
+        #expect(fetched.mtime == file.mtime)
+        #expect(try m.read(fetched) == Data(count: 1003))
+        try #require(remove(m.volume, directory.ref, new, new.count) == 0)
+        try #require(remove(m.volume, root, dirname, dirname.count) == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0)
+        m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        #expect(m.api.nb_lookup!(m.volume, root, dirname, dirname.count, &fetched) == ENOENT)
+        #expect(statfs(m.volume, &stats) == 0)
+        #expect(stats.read_only == 1)
+        #expect(remove(m.volume, root, Array("resident.txt".utf16), 12) == EROFS)
+        #expect(setattr(m.volume, root, &file, UInt32(NB_SET_MTIME)) == EROFS)
+        #expect(rename(m.volume, root, old, old.count, root, new, new.count) == EROFS)
+    }
+
     // Missing filtering loses user files or exposes reserved metadata.
     @Test(arguments: Engine.allCases) func rootListsSystemFilesHidden(engine: Engine) throws {
         let mounted = try Mounted(engine, "basic-512")
@@ -265,7 +368,7 @@ struct BridgeConformanceTests {
         let resident = try mounted.lookup("/resident.txt")
         var extent = nb_extent()
         var count = 0
-        #expect(mounted.api.nb_blockmap!(mounted.volume, resident.ref, 0, resident.size, 0, &extent, 1, &count) == ENOTSUP)
+        #expect(mounted.api.nb_blockmap!(mounted.volume, resident.ref, 0, resident.size, 0, &extent, 1, &count) == 0)
         let name = Array("raw.bin".utf16)
         var attr = nb_attr()
         try #require(name.withUnsafeBufferPointer { mounted.api.nb_create!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, NB_FILE, &attr) } == 0)

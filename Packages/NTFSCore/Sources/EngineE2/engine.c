@@ -9,6 +9,7 @@
 
 int e2_resident(ntfs_inode_t *);
 int e2_writable(ntfs_inode_t *);
+int e2_promote(ntfs_inode_t *);
 int e2_map(ntfs_inode_t *, uint64_t, uint64_t, int, nb_extent *, size_t, size_t *);
 int e2_prepare(ntfs_inode_t *, uint64_t, uint64_t);
 int e2_finish(ntfs_inode_t *, uint64_t, uint64_t);
@@ -252,6 +253,11 @@ int nb_e2_create(nb_volume *v, uint64_t dir, const uint16_t *name, size_t len, u
     ntfs_inode_t *parent = NULL, *inode = NULL;
     rc = positive(ntfs_inode_get(v->core, dir, &parent));
     if (!rc) rc = positive(type == NB_DIR ? ntfs_mkdir(parent, text, 0755, &inode) : ntfs_create(parent, text, 0644, &inode));
+    if (!rc && type == NB_FILE) {
+        rc = e2_promote(inode);
+        /* Compressed/encrypted children remain on the inhibited path. */
+        if (rc == ENOTSUP) rc = 0;
+    }
     struct ntfs_attr a;
     if (!rc) rc = positive(ntfs_getattr(inode, &a));
     if (!rc) attr_out(&a, dir, e2_resident(inode), out);
@@ -289,6 +295,10 @@ int nb_e2_blockmap(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, int f
     if (rc) return rc;
     if (for_write) rc = e2_writable(inode);
     if (!rc) rc = positive(ntfs_fsync(inode, false));
+    if (!rc && !v->bdev.read_only && e2_resident(inode)) {
+        rc = e2_promote(inode);
+        if (!rc) rc = positive(ntfs_fsync(inode, false));
+    }
     if (!rc && for_write) rc = e2_prepare(inode, off, len);
     if (!rc) rc = e2_map(inode, off, len, for_write, out, cap, count);
     ntfs_inode_put(inode); return rc;
@@ -308,9 +318,91 @@ int nb_e2_complete_io(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, in
     return rc;
 }
 int nb_e2_sync(nb_volume *v) { return v ? positive(ntfs_volume_sync(v->core)) : EINVAL; }
+static int nb_e2_getattr(nb_volume *v, uint64_t ref, uint64_t parent, nb_attr *out) {
+    if (!v || !out) return EINVAL;
+    if (ref >> 63) return ENOTSUP;
+    ntfs_inode_t *inode = NULL;
+    int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    struct ntfs_attr a;
+    if (!rc) rc = positive(ntfs_getattr(inode, &a));
+    if (!rc) attr_out(&a, parent, e2_resident(inode), out);
+    ntfs_inode_put(inode);
+    return rc;
+}
+static int nb_e2_statfs(nb_volume *v, nb_stat *out) {
+    if (!v || !out) return EINVAL;
+    struct ntfs_volume_info info;
+    int rc = positive(ntfs_volume_get_info(v->core, &info));
+    if (!rc) *out = (nb_stat){info.total_clusters, info.free_clusters,
+        info.total_mft_records, info.free_mft_records, info.cluster_size, info.read_only};
+    return rc;
+}
+static int volume_writable(nb_volume *v) {
+    if (!v) return EINVAL;
+    nb_stat s;
+    int rc = nb_e2_statfs(v, &s);
+    return rc ? rc : s.read_only ? EROFS : 0;
+}
+static int nb_e2_remove(nb_volume *v, uint64_t dir, const uint16_t *name, size_t len) {
+    int rc = volume_writable(v);
+    if (rc) return rc;
+    char text[1021];
+    rc = utf8(name, len, text);
+    if (rc) return rc;
+    nb_attr a;
+    rc = nb_e2_lookup(v, dir, name, len, &a);
+    if (rc) return rc;
+    ntfs_inode_t *parent = NULL;
+    rc = positive(ntfs_inode_get(v->core, dir, &parent));
+    if (!rc) rc = positive(a.type == NB_DIR ? ntfs_rmdir(parent, text) : ntfs_unlink(parent, text));
+    ntfs_inode_put(parent);
+    return rc;
+}
+static struct ntfs_timespec from_ticks(int64_t t) {
+    int64_t sec = t / INT64_C(10000000), rem = t % INT64_C(10000000);
+    if (rem < 0) { --sec; rem += INT64_C(10000000); }
+    return (struct ntfs_timespec){sec - INT64_C(11644473600), (int32_t)(rem * 100)};
+}
+static int nb_e2_setattr(nb_volume *v, uint64_t ref, const nb_attr *a, uint32_t valid) {
+    int rc = volume_writable(v);
+    if (rc) return rc;
+    if (!a || (valid & ~(NB_SET_SIZE | NB_SET_ATIME | NB_SET_MTIME | NB_SET_CRTIME))) return EINVAL;
+    if ((valid & NB_SET_SIZE) && a->size > INT64_MAX) return EFBIG;
+    if (ref >> 63) return ENOTSUP;
+    struct ntfs_attr attr = {.size = a->size, .atime = from_ticks(a->atime),
+        .mtime = from_ticks(a->mtime), .crtime = from_ticks(a->crtime)};
+    uint32_t bits = ((valid & NB_SET_SIZE) ? NTFS_SETATTR_SIZE : 0)
+        | ((valid & NB_SET_ATIME) ? NTFS_SETATTR_ATIME : 0)
+        | ((valid & NB_SET_MTIME) ? NTFS_SETATTR_MTIME : 0)
+        | ((valid & NB_SET_CRTIME) ? NTFS_SETATTR_CRTIME : 0);
+    ntfs_inode_t *inode = NULL;
+    rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    /* TT's size path overwrites mtime; apply explicit timestamps afterward. */
+    if (!rc && (bits & NTFS_SETATTR_SIZE))
+        rc = positive(ntfs_setattr(inode, &attr, NTFS_SETATTR_SIZE));
+    if (!rc && (bits & ~NTFS_SETATTR_SIZE))
+        rc = positive(ntfs_setattr(inode, &attr, bits & ~NTFS_SETATTR_SIZE));
+    ntfs_inode_put(inode);
+    return rc;
+}
+static int nb_e2_rename(nb_volume *v, uint64_t from, const uint16_t *old, size_t oldlen,
+                        uint64_t to, const uint16_t *new, size_t newlen) {
+    int rc = volume_writable(v);
+    if (rc) return rc;
+    char oldtext[1021], newtext[1021];
+    rc = utf8(old, oldlen, oldtext);
+    if (!rc) rc = utf8(new, newlen, newtext);
+    ntfs_inode_t *a = NULL, *b = NULL;
+    if (!rc) rc = positive(ntfs_inode_get(v->core, from, &a));
+    if (!rc) rc = positive(ntfs_inode_get(v->core, to, &b));
+    if (!rc) rc = positive(ntfs_rename(a, oldtext, b, newtext));
+    ntfs_inode_put(a); ntfs_inode_put(b);
+    return rc;
+}
 static const nb_engine engine = {
     nb_e2_probe_state, nb_e2_mount, nb_e2_unmount, nb_e2_root_ref, nb_e2_lookup,
     nb_e2_readdir, nb_e2_read, nb_e2_create, nb_e2_write, nb_e2_truncate,
-    nb_e2_blockmap, nb_e2_complete_io, nb_e2_sync
+    nb_e2_blockmap, nb_e2_complete_io, nb_e2_sync,
+    nb_e2_getattr, nb_e2_remove, nb_e2_statfs, nb_e2_setattr, nb_e2_rename
 };
 const nb_engine *nb_engine_e2(void) { return &engine; }

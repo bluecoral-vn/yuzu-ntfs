@@ -24,6 +24,17 @@ typedef enum { NB_CLEAN, NB_HIBERNATED, NB_FAST_STARTUP, NB_DIRTY_LOG, NB_DIRTY_
 typedef struct { uint64_t ref, parent_ref, size, alloc_size; uint32_t type /*file,dir,symlink*/, ntfs_attrs, nlink;
   int64_t crtime, mtime, ctime, atime /*NTFS 100ns*/; uint32_t flags /*NB_RESIDENT|NB_COMPRESSED|NB_ENCRYPTED|NB_SPARSE*/; } nb_attr;
 typedef struct { uint64_t logical, physical, length; uint32_t kind /*NB_EXT_DATA, NB_EXT_HOLE, NB_EXT_UNINIT*/; } nb_extent;
+typedef struct { uint64_t total_blocks, free_blocks, total_files, free_files; uint32_t block_size; int read_only; } nb_stat;
+#define NB_SET_SIZE (1u << 0)
+#define NB_SET_ATIME (1u << 1)
+#define NB_SET_MTIME (1u << 2)
+#define NB_SET_CRTIME (1u << 3)
+/* T7-R2 append-only operations. getattr's parent is supplied by the caller.
+ * remove unlinks files or removes empty directories (ENOTEMPTY otherwise).
+ * statfs counts clusters and MFT slots; read_only reflects current core state.
+ * setattr accepts only NB_SET_* size/times (NTFS 100ns epoch), others EINVAL.
+ * rename is POSIX replace-or-move; names use the same UTF-16 rules as lookup.
+ * All mutations reject read-only cores. Sync/unmount persists their metadata. */
 typedef int (*nb_dirent_cb)(void *ctx, const uint16_t *name, size_t len, const nb_attr *attr, uint64_t next_cookie);
 int nb_probe_state(const nb_blockdev *dev, nb_state *out);
 int nb_mount(const nb_blockdev *dev, int read_write, nb_volume **out);   /* errno-style return */
@@ -57,14 +68,20 @@ int nb_sync(nb_volume *v);
  *   Zeroing is flushed before success. If zeroing/flush fails, restore the
  *   original hole and release its new allocation; failed restoration reports
  *   EIO and enters the core's read-only error path.
- * - Read mapping never allocates: holes are NB_EXT_HOLE; allocated bytes in
- *   [initialized_size, size) are NB_EXT_UNINIT and MUST be zero-filled by caller.
+ * - Read mapping of nonresident data never allocates: holes are NB_EXT_HOLE;
+ *   allocated bytes in [initialized_size,size) are NB_EXT_UNINIT, zero-filled
+ *   by caller. T7-R3/R4 amendment: on RW mounts first mapping (read OR write)
+ *   converts uncompressed/unencrypted resident data to nonresident, preserving
+ *   existing bytes and EOF. This can allocate on a resident read. RO resident
+ *   mappings still return ENOTSUP; use buffered reads without any mutation.
  * - Successful write completion raises initialized_size and size to their
  *   respective max(current, off+len), persists metadata, and invalidates cached
  *   data. If off exceeds initialized_size, it first zeroes the gap (sparse holes
  *   may remain holes) and flushes payload/gap BEFORE publishing the new VDL.
  * - Failed completion preserves both sizes; allocated clusters may remain.
- * - Resident/compressed/encrypted mappings return ENOTSUP; use read/write.
+ * - Compressed/encrypted mappings return ENOTSUP; use buffered reads.
+ *   nb_create regular files start nonresident (except compressed/encrypted
+ *   inherited attributes). P0 FSKit rejects writes to those inhibited items.
  * - Write mappings/completion reject a currently read-only or shut-down core
  *   with EROFS, including an errors=remount-ro transition after mount.
  * Callers serialize offloaded I/O with writes, truncate and other offloaded
@@ -84,5 +101,11 @@ typedef struct nb_engine {
   int (*nb_blockmap)(nb_volume *, uint64_t, uint64_t, uint64_t, int, nb_extent *, size_t, size_t *);
   int (*nb_complete_io)(nb_volume *, uint64_t, uint64_t, uint64_t, int, int);
   int (*nb_sync)(nb_volume *);
+  int (*nb_getattr)(nb_volume *, uint64_t ref, uint64_t parent, nb_attr *);
+  int (*nb_remove)(nb_volume *, uint64_t dir, const uint16_t *, size_t);
+  int (*nb_statfs)(nb_volume *, nb_stat *);
+  int (*nb_setattr)(nb_volume *, uint64_t ref, const nb_attr *, uint32_t valid);
+  int (*nb_rename)(nb_volume *, uint64_t from_dir, const uint16_t *, size_t,
+                   uint64_t to_dir, const uint16_t *, size_t);
 } nb_engine;
 #endif

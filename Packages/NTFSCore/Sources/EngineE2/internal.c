@@ -24,6 +24,29 @@ int e2_writable(ntfs_inode_t *h)
     return IS_RDONLY(vi) || NVolShutdown(NTFS_I(vi)->vol) ? EROFS : 0;
 }
 
+/* T7-R3/R4: empty new files and first data access on RW mounts must be
+ * KOIO-capable. Inhibited resident streaming writes wedge macOS 27 before
+ * issuing a byte-copy upcall. Existing RO resident files are never converted. */
+int e2_promote(ntfs_inode_t *h)
+{
+    struct inode *vi = (struct inode *)h;
+    struct ntfs_inode *ni = NTFS_I(vi);
+    inode_lock(vi);
+    int err = e2_writable(h);
+    if (!err && (NInoCompressed(ni) || NInoEncrypted(ni))) err = ENOTSUP;
+    if (!err && !NInoNonResident(ni)) {
+        if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY))
+            err = ntfs_set_volume_flags(ni->vol, VOLUME_IS_DIRTY);
+        if (!err) {
+            mutex_lock(&ni->mrec_lock);
+            err = ntfs_attr_make_non_resident(ni, (u32)ni->data_size);
+            mutex_unlock(&ni->mrec_lock);
+        }
+    }
+    inode_unlock(vi);
+    return err < 0 ? -err : err;
+}
+
 static int zero_gap(struct ntfs_inode *ni, uint64_t start, uint64_t end);
 
 /* Caller holds i_rwsem exclusive and mrec_lock. No data is zeroed here. */
