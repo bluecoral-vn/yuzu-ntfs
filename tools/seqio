@@ -1,0 +1,32 @@
+#!/usr/bin/swift
+// SPDX-License-Identifier: GPL-2.0-only
+import Foundation
+import Darwin
+
+func fail(_ text: String) -> Never { fputs("seqio: \(text)\n", stderr); exit(1) }
+let args = CommandLine.arguments
+if args.count != 4 { fail("usage: seqio read|write path bytes") }
+guard let count = Int64(args[3]), count > 0, ["read", "write"].contains(args[1]) else { fail("invalid arguments") }
+let writing = args[1] == "write"
+let fd = open(args[2], writing ? O_WRONLY | O_CREAT | O_TRUNC : O_RDONLY, 0o600)
+if fd < 0 { fail(String(cString: strerror(errno))) }
+defer { close(fd) }
+if fcntl(fd, F_NOCACHE, 1) != 0 { fail("F_NOCACHE: \(String(cString: strerror(errno)))") }
+let block = 8 * 1024 * 1024
+let buffer = UnsafeMutableRawPointer.allocate(byteCount: block, alignment: 4096)
+defer { buffer.deallocate() }
+// Nonzero deterministic payload prevents a zero/sparse optimization from winning.
+for i in 0..<block { buffer.storeBytes(of: UInt8(truncatingIfNeeded: (i &* 31) ^ (i >> 8)), toByteOffset: i, as: UInt8.self) }
+let start = DispatchTime.now().uptimeNanoseconds
+var done: Int64 = 0
+while done < count {
+    let within = Int(done % Int64(block))
+    let size = min(block - within, Int(min(Int64(block), count - done)))
+    let actual = writing ? Darwin.write(fd, buffer.advanced(by: within), size) : Darwin.read(fd, buffer.advanced(by: within), size)
+    if actual < 0 { if errno == EINTR { continue }; fail(String(cString: strerror(errno))) }
+    if actual == 0 { fail("unexpected EOF/zero write at \(done)") }
+    done += Int64(actual)
+}
+if writing && fsync(fd) != 0 { fail("fsync: \(String(cString: strerror(errno)))") }
+let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+print(String(format: "{\"bytes\":%lld,\"seconds\":%.6f,\"mib_s\":%.3f}", done, seconds, Double(done) / 1048576 / seconds))
