@@ -6,6 +6,8 @@ Yuzu NTFS **0.1 Beta** is an independent, GPL-2.0-only NTFS driver and menu-bar 
 
 The app shows “Yuzu NTFS 0.1 Beta” and Quit in a menu-bar extra. Its embedded FSKit module probes NTFS boot sectors, including 4Kn resources, using the `NTFSProbe` library; recognized volumes use the name “NTFS” and a stable serial-derived UUID. Loading volumes still returns `ENOTSUP`. **This is not yet a usable NTFS driver.** Do not attach valuable data to experimental driver builds.
 
+R2 adds media-match / probe-order metadata: on macOS 27 image fixtures, automatic attachment now selects Yuzu ahead of Apple's read-only NTFS implementation, then fails at the intentional loading boundary. Until the engine is implemented, enabling this experimental build can prevent NTFS images from mounting automatically. See [R2 automount findings](docs/spikes/p0-r2-automount.md) for precedence evidence, the mount-entitlement boundary, and the still-open RW / physical-hardware gates.
+
 Identifiers: app `com.bluecoral.vn.yuzuntfs`, module `com.bluecoral.vn.yuzuntfs.fsmodule`, FS short name `yuzuntfs`; Apple team `37PX6W22C5`. Version `0.1.0`, build `1`; Swift 6 strict concurrency. `Packages/NTFSCore` contains the `NTFSProbe` library and Swift Testing parser tests; the C engine is deferred.
 
 ## Build
