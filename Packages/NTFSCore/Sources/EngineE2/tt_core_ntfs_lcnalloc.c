@@ -1,0 +1,1 @@
+../../../../upstream/ttntfs/core/ntfs/lcnalloc.c
