@@ -10,7 +10,7 @@ Identifiers: app `com.bluecoral.vn.yuzuntfs`, module `com.bluecoral.vn.yuzuntfs.
 
 ## Build
 
-Requirements: Xcode 27.1 (tested host toolchain), XcodeGen, an arm64 Mac; Python 3 for the fixture acceptance checker. `project.yml` is the source of truth; the generated Xcode project is not committed.
+Requirements: Xcode 27.1 (tested host toolchain), XcodeGen, an arm64 Mac; Python 3 for the ntfsprogs source-integrity check and fixture acceptance checker. `project.yml` is the source of truth; the generated Xcode project is not committed.
 
 ```sh
 xcodegen generate
@@ -28,6 +28,8 @@ scripts/check-fixtures.py
 ```
 
 The bootstrap downloads the upstream [NTFS-3G 2022.10.3 release](https://github.com/tuxera/ntfs-3g/releases/tag/2022.10.3), verifies tarball SHA-256 `f20e36ee68074b845e3629e6bced4706ad053804cbaf062fbae60738f854170c`, and builds `mkntfs`, `ntfsinfo`, `ntfsls`, `ntfscat` and static `libntfs-3g.a` with `--disable-ntfs-3g --enable-ntfsprogs --enable-static --disable-shared`. **No FUSE, autotools installation, root access, or VM is required.** The extracted source stays pristine at `vendor/ntfs-3g_ntfsprogs-2022.10.3/`; configure and compilation run out-of-tree under `vendor/build/ntfs-3g-2022.10.3/`. Generated `config.h` is in that build directory and the static library is at `vendor/build/ntfs-3g-2022.10.3/libntfs-3g/.libs/libntfs-3g.a`. Both trees and the archive are gitignored; installed binaries go in ignored `tools/bin/`. The pinned upstream release is a test-only tool dependency, not an engine-selection decision; its own upstream license notices remain in the extracted source.
+
+Before reusing the source or installed tools, the bootstrap verifies the archive checksum and compares the extracted source's exact path set, file types, bytes and executable bits against that archive. Missing, modified or in-source-configured trees are automatically replaced by a fresh extraction. Treat this ignored test-tool source tree as disposable: local edits there are intentionally discarded. This also upgrades the original in-source bootstrap layout without requiring manual cleanup.
 
 A small C program in `tools/fixturegen/` authors files directly through that static library, flushes/unmounts, remounts read-only, compares every authored file/stream byte against its deterministic source pattern and emits SHA-256 manifests. The Python checker independently reads all small-corpus files/streams and representative big-directory files through `ntfscat`, checks root listing counts, boot-sector geometry, hard-link identity and the normalization pair. Every bigdir file is read back by the C generator; Python samples four of them to avoid 100,000 process launches.
 
