@@ -7,6 +7,7 @@ options:
 configs:
   Debug: debug
   Release: release
+  Release-Direct: release
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -24,6 +25,11 @@ settings:
       ONLY_ACTIVE_ARCH: YES
     Release:
       ONLY_ACTIVE_ARCH: NO
+    Release-Direct:
+      ONLY_ACTIVE_ARCH: NO
+      CODE_SIGN_IDENTITY: "Developer ID Application: Nguyen Le (37PX6W22C5)"
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+      OTHER_CODE_SIGN_FLAGS: --timestamp
 packages:
   NTFSCore:
     path: Packages/NTFSCore
@@ -45,6 +51,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bluecoral.vn.yuzuntfs
+      configs:
+        Release-Direct:
+          PRODUCT_NAME: Yuzu NTFS
+          PROVISIONING_PROFILE_SPECIFIER: Yuzu NTFS Developer ID
     dependencies:
       - target: YuzuNTFSModule
         embed: true
@@ -66,6 +76,8 @@ targets:
           # Restricted FSKit entitlements require a profile in Xcode's signer.
           # This build-only spike uses the explicit ad-hoc signing step below.
           CODE_SIGNING_ALLOWED: NO
+        Release-Direct:
+          PROVISIONING_PROFILE_SPECIFIER: Yuzu NTFS FSKit Module Developer ID
     postBuildScripts:
       - name: Ad-hoc sign Debug FSKit module
         script: |
