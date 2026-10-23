@@ -78,6 +78,14 @@ int nb_sync(nb_volume *v);
  *   respective max(current, off+len), persists metadata, and invalidates cached
  *   data. If off exceeds initialized_size, it first zeroes the gap (sparse holes
  *   may remain holes) and flushes payload/gap BEFORE publishing the new VDL.
+ *   T7-R5 P0 ordering: apply delivered completions in arrival order; never
+ *   defer a completed cached write behind another operation's mapping lease.
+ *   P1 OPEN: a higher completion may still zero a lower beyond-VDL write that
+ *   physically landed but has not been reported to nb_complete_io. This ABI
+ *   cannot distinguish those bytes from recycled/uninitialized disk contents.
+ *   Candidate fixes: track outstanding/retained beyond-VDL mappings in the
+ *   volume and defer gap zeroing until they complete; or never hand out
+ *   cacheable mappings beyond VDL. P0 does not implement either guarantee.
  * - Failed completion preserves both sizes; allocated clusters may remain.
  * - Compressed/encrypted mappings return ENOTSUP; use buffered reads.
  *   nb_create regular files start nonresident (except compressed/encrypted

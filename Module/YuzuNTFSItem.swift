@@ -8,6 +8,7 @@ final class YuzuNTFSItem: FSItem {
     var parent: UInt64
     var version: UInt64 = 1
     let io = NSCondition()
+    private let completionLock = NSLock()
     // One explicit operation owns the inode lease; repeated maps with the same
     // ID append extents. Unspecified/cached completions never own this lease.
     var operation: FSOperationID?
@@ -26,11 +27,12 @@ final class YuzuNTFSItem: FSItem {
         let high = first.ref < second.ref ? second : first
         return try low.normal { try high.normal(body) }
     }
-    // Caller holds io through the completion body, so a cached completion waits
-    // for any explicit owner rather than changing metadata underneath its I/O.
+    // Serialize arrived metadata completions independently of outstanding map
+    // ownership. Waiting for an unrelated map would reorder cached writes:
+    // the later owner's VDL gap zeroing could erase the earlier payload.
     func completing<T>(_ id: FSOperationID, _ body: () throws -> T) rethrows -> T {
+        completionLock.lock(); defer { completionLock.unlock() }
         io.lock(); defer { finishMapping(id); io.unlock() }
-        while operation != nil && operation != id { io.wait() }
         return try body()
     }
     func finishMapping(_ id: FSOperationID) {

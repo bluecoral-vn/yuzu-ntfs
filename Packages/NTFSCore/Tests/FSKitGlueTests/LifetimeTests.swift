@@ -57,6 +57,7 @@ private final class OfflineVolume {
     let image: URL
     let fd: Int32
     var core: OpaquePointer?
+    var dev = nb_blockdev()
     init() throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -65,7 +66,7 @@ private final class OfflineVolume {
         fd = open(image.path, O_RDWR)
         try #require(fd >= 0)
         var s = Darwin.stat(); try #require(fstat(fd, &s) == 0)
-        var dev = nb_blockdev(ctx: UnsafeMutableRawPointer(bitPattern: Int(fd) + 1), size: UInt64(s.st_size), sector_size: 512,
+        dev = nb_blockdev(ctx: UnsafeMutableRawPointer(bitPattern: Int(fd) + 1), size: UInt64(s.st_size), sector_size: 512,
             read: { ctx, off, buf, len in
                 let fd = Int32(Int(bitPattern: ctx) - 1)
                 var done = 0
@@ -84,6 +85,10 @@ private final class OfflineVolume {
         try #require(api.nb_mount!(&dev, 1, &core) == 0)
     }
     deinit { if let core { _ = api.nb_unmount!(core) }; close(fd); try? FileManager.default.removeItem(at: image) }
+    func remount() throws {
+        try #require(api.nb_unmount!(core) == 0); core = nil
+        try #require(api.nb_mount!(&dev, 1, &core) == 0)
+    }
     var root: UInt64 { api.nb_root_ref!(core) }
     func create(_ name: String) throws -> nb_attr {
         var a = nb_attr(); let u = Array(name.utf16)
@@ -143,4 +148,54 @@ private final class OfflineVolume {
     }
     #expect(extents > 128)
     #expect(end == 140 * 4096)
+}
+
+private final class CachedCompletion: @unchecked Sendable {
+    let volume: OfflineVolume
+    let item: YuzuNTFSItem
+    let arrived = DispatchSemaphore(value: 0)
+    let applied = DispatchSemaphore(value: 0)
+    var result: Int32 = -1 // Read only after the applied semaphore synchronizes.
+    init(volume: OfflineVolume, item: YuzuNTFSItem) { self.volume = volume; self.item = item }
+    func apply() {
+        arrived.signal()
+        item.completing(.unspecified) {
+            result = volume.api.nb_complete_io!(volume.core, item.ref, 4096, 4096, 0, 1)
+        }
+        applied.signal()
+    }
+}
+
+@Test func cachedCompletionDeliveredBeforeLaterRangePreservesPayloadAfterRemount() throws {
+    let v = try OfflineVolume(), file = try v.create("completion-order")
+    try v.writeCluster(file.ref, at: 0) // EOF and VDL both 4096.
+    var cached = nb_extent(), later = nb_extent(), count = 0
+    try #require(v.api.nb_blockmap!(v.core, file.ref, 4096, 4096, 1, &cached, 1, &count) == 0)
+    try #require(count == 1)
+    try #require(v.api.nb_blockmap!(v.core, file.ref, 8192, 4096, 1, &later, 1, &count) == 0)
+    try #require(count == 1)
+    let a = Data(repeating: 0xa5, count: 4096), b = Data(repeating: 0xb6, count: 4096)
+    try #require(a.withUnsafeBytes { pwrite(v.fd, $0.baseAddress, 4096, off_t(cached.physical)) } == 4096)
+    try #require(b.withUnsafeBytes { pwrite(v.fd, $0.baseAddress, 4096, off_t(later.physical)) } == 4096)
+    let item = YuzuNTFSItem(ref: file.ref, parent: v.root), owner = FSOperationID(rawValue: 22)
+    item.operation = owner; item.extents = [later]
+    let completion = CachedCompletion(volume: v, item: item)
+    DispatchQueue.global().async { completion.apply() }
+    try #require(completion.arrived.wait(timeout: .now() + 5) == .success)
+    let beforeB = completion.applied.wait(timeout: .now() + 0.25)
+    #expect(beforeB == .success, "An arrived cached completion must not wait behind B's outstanding map")
+    item.io.lock()
+    #expect(item.operation == owner)
+    #expect(item.extents.count == 1)
+    item.io.unlock()
+    let rc = item.completing(owner) { v.api.nb_complete_io!(v.core, file.ref, 8192, 4096, 0, 1) }
+    try #require(rc == 0)
+    if beforeB != .success { try #require(completion.applied.wait(timeout: .now() + 5) == .success) }
+    try #require(completion.result == 0)
+    #expect(item.operation == nil)
+    try v.remount()
+    var bytes = Data(count: 12288), got = 0
+    try #require(bytes.withUnsafeMutableBytes { v.api.nb_read!(v.core, file.ref, 0, $0.baseAddress, $0.count, &got) } == 0)
+    #expect(got == 12288)
+    #expect(bytes == Data(repeating: 0x5a, count: 4096) + a + b)
 }
