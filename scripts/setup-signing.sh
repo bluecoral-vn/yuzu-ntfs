@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import hashlib
+import re
 
 root = Path(sys.argv[1])
 key_id = os.environ.get("ASC_KEY_ID", "5Y9N24UTB9")
@@ -73,6 +74,31 @@ def all_items(resource):
         items.extend(result["data"])
     return items
 
+def certificate_team(der):
+    subject = subprocess.run(["openssl", "x509", "-inform", "der", "-noout", "-subject",
+                              "-nameopt", "sep_multiline,utf8,sname"],
+                             input=der, capture_output=True, check=True).stdout.decode()
+    organizational_units = [line.partition("=")[2].strip() for line in subject.splitlines()
+                            if line.partition("=")[0].strip() == "OU"]
+    return organizational_units[0] if len(organizational_units) == 1 else None
+
+def installed_certificate(certificates, identity_fingerprints, certificate_types, expected_team):
+    for cert in certificates:
+        attrs = cert["attributes"]
+        if attrs["certificateType"] not in certificate_types:
+            continue
+        der = base64.b64decode(attrs["certificateContent"])
+        fingerprint = hashlib.sha1(der).hexdigest().upper()
+        if fingerprint in identity_fingerprints and certificate_team(der) == expected_team:
+            return cert["id"], der, fingerprint
+    return None
+
+def profile_is_reusable(attributes, decoded, identifier, signing_certificate):
+    return (attributes["profileState"] == "ACTIVE"
+            and signing_certificate in decoded.get("DeveloperCertificates", [])
+            and (not identifier.endswith(".fsmodule")
+                 or decoded["Entitlements"].get("com.apple.developer.fskit.fsmodule") is True))
+
 bundles = {}
 for identifier, name, _ in identifiers:
     matches = api("GET", query("bundleIds", **{"filter[identifier]": identifier}))["data"]
@@ -88,16 +114,21 @@ def module_capability_enabled():
 
 identities = subprocess.run(["security", "find-identity", "-v", "-p", "codesigning"],
                             capture_output=True, text=True, check=True).stdout
+identity_fingerprints = set(re.findall(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"[^"]+"\s*$',
+                                     identities, re.MULTILINE))
+certificates = all_items("certificates")
 if not module_capability_enabled():
     # Public ASC POST rejects FSKIT_MODULE (409); Xcode's provisioning service knows it.
     # This may report no registered development Macs yet still enable the capability.
     # No certificate creation is needed: reuse the installed Apple Development identity.
-    if "Apple Development:" not in identities or "(" + team + ")" not in identities:
-        raise SystemExit("Install the existing Apple Development identity before Xcode provisioning; no certificate creation authorized.")
+    development = installed_certificate(certificates, identity_fingerprints, {"DEVELOPMENT"}, team)
+    if development is None:
+        raise SystemExit("Install an existing Apple Development identity whose certificate OU matches " + team
+                         + " before Xcode provisioning; no certificate creation authorized.")
     subprocess.run(["xcodegen", "generate"], cwd=root, check=True)
     result = subprocess.run(["xcodebuild", "-scheme", "YuzuNTFS", "-configuration", "Release-Direct",
         "-derivedDataPath", "build/signing-bootstrap", "-destination", "generic/platform=macOS",
-        "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development", "PROVISIONING_PROFILE_SPECIFIER=",
+        "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=" + development[2], "PROVISIONING_PROFILE_SPECIFIER=",
         "DEVELOPMENT_TEAM=" + team, "-allowProvisioningUpdates", "-authenticationKeyPath", str(key_path),
         "-authenticationKeyID", key_id, "-authenticationKeyIssuerID", issuer, "build"], cwd=root)
     if not module_capability_enabled():
@@ -106,17 +137,12 @@ if not module_capability_enabled():
                          f"Xcode exit status: {result.returncode}")
     print("FSKIT_MODULE enabled by Xcode provisioning service; bootstrap exit", result.returncode)
 
-certificate_id = None
-for cert in all_items("certificates"):
-    attrs = cert["attributes"]
-    if attrs["certificateType"] not in ("DEVELOPER_ID_APPLICATION", "DEVELOPER_ID_APPLICATION_G2"):
-        continue
-    der = base64.b64decode(attrs["certificateContent"])
-    if hashlib.sha1(der).hexdigest().upper() in identities:
-        certificate_id = cert["id"]
-        break
-if certificate_id is None:
-    raise SystemExit("No existing Developer ID Application certificate with installed private key. No certificate created.")
+direct = installed_certificate(certificates, identity_fingerprints,
+                               {"DEVELOPER_ID_APPLICATION", "DEVELOPER_ID_APPLICATION_G2"}, team)
+if direct is None:
+    raise SystemExit("No existing Developer ID Application certificate with installed private key for " + team
+                     + ". No certificate created.")
+certificate_id, signing_certificate, _ = direct
 
 profiles = all_items("profiles")
 for identifier, _, profile_name in identifiers:
@@ -131,8 +157,7 @@ for identifier, _, profile_name in identifiers:
         entitlements = decoded["Entitlements"]
         if entitlements.get("com.apple.application-identifier") != team + "." + identifier:
             raise SystemExit("Profile name belongs to another identifier: refusing to modify it")
-        if attrs["profileState"] == "ACTIVE" and (not identifier.endswith(".fsmodule") or
-                                                   entitlements.get("com.apple.developer.fskit.fsmodule") is True):
+        if profile_is_reusable(attrs, decoded, identifier, signing_certificate):
             selected = item
             break
         # Delete only this exact Yuzu NTFS profile whose decoded identifier was checked above.
