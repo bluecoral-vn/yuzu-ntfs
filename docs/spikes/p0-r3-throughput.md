@@ -217,3 +217,11 @@ Only then compare Yuzu read/write medians with raw and issue a **provisional ima
 ## Remaining owner-visible state
 
 At final read-only inventory, project attachments were `build/r3/exfat.img` (disk8), `build/r3/mount-test.img` (disk9), and `build/r3/mount-test2.img` (disk10), none with a mountpoint. **These identifiers are historical only.** cp PID 65911 remained UID 501/state U; its SIGKILL could not complete while blocked in kernel write. No owned log stream, diskutil/hdiutil timeout client, or serving Yuzu extension remained. No source fixture was modified. The sandbox allowlist was empty. Do not delete backing files while attached; owner reboot, then re-inventory before cleanup. No system daemon, physical disk, security setting, or other repository was changed.
+
+## Code-only review correction, round 1
+
+Before resuming mounted writes, four review findings were corrected in source: successful root/lookup/create publication now shares the identity/reclaim critical section through the SDK reply; each live item pins its core inode until successful reclaim (append-only `nb_hold`/`nb_release`); rename replacement acquires both source and target I/O guards in stable MFT-ref order; and completions release only their own operation ID. Cached/unspecified completions wait behind an explicit operation and obtain their own physical mapping for cache purge rather than clearing another operation's extents. Fragmented mappings now consume ENOBUFS prefixes and continue in bounded 128-extent batches.
+
+Deterministic unit regressions exercise publication exclusion, unrelated/unspecified completion ownership, real pinned replacement/unlink with MFT-reuse attempts and deferred cluster freeing, and an actual bridge-fragmented file with more than 128 extents. This round performs no mount, attach, app build, signing, installation or daemon operation. Its final plain test result and commit are appended to the Task 7 report; the mounted R3 verdict remains **BLOCKED-PENDING-REBOOT**.
+
+Final round-1 plain verification (`swift test --package-path Packages/NTFSCore`, exit 0): **17 probe/policy + 7 actual Swift glue + 18 bridge tests**; full fixture-entry ntfscat verification passed, bridge duration **304.572 s**. This supersedes the pre-review three-test glue count above. No additional app build or mounted verification is claimed.

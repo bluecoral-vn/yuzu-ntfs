@@ -17,7 +17,6 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         flags & UInt32(NB_COMPRESSED | NB_ENCRYPTED) == 0
     }
     let api = nb_engine_e2()!.pointee
-    private let lock = NSRecursiveLock()
     private var core: OpaquePointer?
     private let items = YuzuNTFSItemTable()
     private var rootRef: UInt64 = 5
@@ -28,10 +27,21 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         super.init(volumeID: FSVolume.Identifier(uuid: boot.volumeUUID), volumeName: FSFileName(string: "Yuzu-NTFS"))
     }
     private func check(_ code: Int32) throws { if code != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(code)) } }
-    private func serial<T>(_ body: () throws -> T) rethrows -> T { lock.lock(); defer { lock.unlock() }; return try body() }
+    private func serial<T>(_ body: () throws -> T) rethrows -> T { try items.withLock(body) }
     private func node(_ item: FSItem) -> YuzuNTFSItem { item as! YuzuNTFSItem }
-    private func identity(_ ref: UInt64, parent: UInt64) -> YuzuNTFSItem {
-        items.item(ref: ref, parent: parent)
+    private func publish(_ ref: UInt64, parent: UInt64,
+                         prepare: (YuzuNTFSItem) throws -> Void = { _ in },
+                         reply: (YuzuNTFSItem) -> Void) throws {
+        try items.publish(ref: ref, parent: parent, initialize: { item in
+            if item.releasePin == nil {
+                try check(api.nb_hold!(core, ref))
+                item.releasePin = { [weak self] in
+                    guard let self else { return }
+                    self.serial { if let core = self.core { _ = self.api.nb_release!(core, ref) } }
+                }
+            }
+            try prepare(item)
+        }, reply: reply)
     }
     private func id(_ ref: UInt64) -> FSItem.Identifier { ref == rootRef ? .rootDirectory : FSItem.Identifier(ref + 16) }
     private func units(_ name: FSFileName) throws -> [UInt16] {
@@ -125,13 +135,12 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     func activate(options: FSTaskOptions, replyHandler reply: @escaping (FSItem?, (any Error)?) -> Void) {
         do {
-            let root = try serial {
+            try serial {
                 var dev = device.blockdev
                 try check(api.nb_mount!(&dev, writable ? 1 : 0, &core))
                 rootRef = api.nb_root_ref!(core)
-                return identity(rootRef, parent: rootRef)
+                try publish(rootRef, parent: rootRef) { reply($0, nil) }
             }
-            reply(root, nil)
         } catch { reply(nil, error) }
     }
     func mount(options: FSTaskOptions, replyHandler reply: @escaping ((any Error)?) -> Void) {
@@ -146,20 +155,19 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         do { try serial { try check(api.nb_sync!(core)) }; reply(nil) } catch { reply(error) }
     }
     func reclaimItem(_ item: FSItem, replyHandler reply: @escaping ((any Error)?) -> Void) {
-        serial {
+        node(item).normal { serial {
             let clear = { self.items.forget(self.node(item)) }
             if #available(macOS 27, *) { _ = item.tryReclaim(clear) } else { clear() }
-        }
+        } }
         reply(nil)
     }
     func lookupItem(named name: FSFileName, inDirectory directory: FSItem, replyHandler reply: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) {
         do {
-            let item = try serial {
+            try serial {
                 let nameUnits = try units(name); var a = nb_attr()
                 try check(api.nb_lookup!(core, node(directory).ref, nameUnits, nameUnits.count, &a))
-                return identity(a.ref, parent: a.parent_ref)
+                try publish(a.ref, parent: a.parent_ref) { reply($0, name, nil) }
             }
-            reply(item, name, nil)
         } catch { reply(nil, nil, error) }
     }
     func getAttributes(_ request: FSItem.GetAttributesRequest, of item: FSItem, replyHandler reply: @escaping (FSItem.Attributes?, (any Error)?) -> Void) {
@@ -170,15 +178,14 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     func createItem(named name: FSFileName, type: FSItem.ItemType, inDirectory directory: FSItem, attributes request: FSItem.SetAttributesRequest, replyHandler reply: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) {
         do {
-            let item = try serial {
+            try serial {
                 guard type == .file || type == .directory else { throw POSIXError(.ENOTSUP) }
                 var a = nb_attr(); let u = try units(name)
                 try check(api.nb_create!(core, node(directory).ref, u, u.count, UInt32(type == .directory ? NB_DIR : NB_FILE), &a))
-                let item = identity(a.ref, parent: a.parent_ref)
-                try apply(request, to: item); node(directory).version &+= 1
-                return item
+                try publish(a.ref, parent: a.parent_ref, prepare: { item in
+                    try apply(request, to: item); node(directory).version &+= 1
+                }) { reply($0, name, nil) }
             }
-            reply(item, name, nil)
         } catch { reply(nil, nil, error) }
     }
     func removeItem(_ item: FSItem, named name: FSFileName, fromDirectory directory: FSItem, replyHandler reply: @escaping ((any Error)?) -> Void) {
@@ -187,7 +194,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         } }; reply(nil) } catch { reply(error) }
     }
     func renameItem(_ item: FSItem, inDirectory source: FSItem, named old: FSFileName, to new: FSFileName, inDirectory destination: FSItem, overItem: FSItem?, replyHandler reply: @escaping (FSFileName?, (any Error)?) -> Void) {
-        do { try node(item).normal { try serial {
+        do { try YuzuNTFSItem.mutating(node(item), replacing: overItem.map { node($0) }) { try serial {
             let a = try units(old), b = try units(new)
             try check(api.nb_rename!(core, node(source).ref, a, a.count, node(destination).ref, b, b.count))
             node(item).parent = node(destination).ref; node(source).version &+= 1; node(destination).version &+= 1
@@ -250,41 +257,47 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             guard offset >= 0 else { throw POSIXError(.EINVAL) }
             if operationID != .unspecified { item.operation = operationID }
             try serial {
-                var extents = [nb_extent](repeating: nb_extent(), count: 128), count = 0
-                try check(api.nb_blockmap!(core, item.ref, UInt64(offset), UInt64(length), flags.contains(.write) ? 1 : 0, &extents, extents.count, &count))
-                extents.removeSubrange(count...)
-                try device.purge(extents)
-                item.extents.append(contentsOf: extents)
-                for extent in extents {
-                    var done: UInt64 = 0
-                    while done < extent.length {
-                        let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
-                        let zero = extent.kind == NB_EXT_HOLE || (extent.kind == NB_EXT_UNINIT && !flags.contains(.write))
-                        if !packer.packExtent(resource: device.resource, type: zero ? .zeroFill : .data,
-                            logicalOffset: off_t(extent.logical + done), physicalOffset: off_t(extent.physical + done), length: Int(chunk)) { return }
-                        done += chunk
+                try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: flags.contains(.write)) { extents in
+                    try device.purge(extents)
+                    if operationID != .unspecified { item.extents.append(contentsOf: extents) }
+                    for extent in extents {
+                        var done: UInt64 = 0
+                        while done < extent.length {
+                            let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
+                            let zero = extent.kind == NB_EXT_HOLE || (extent.kind == NB_EXT_UNINIT && !flags.contains(.write))
+                            if !packer.packExtent(resource: device.resource, type: zero ? .zeroFill : .data,
+                                logicalOffset: off_t(extent.logical + done), physicalOffset: off_t(extent.physical + done), length: Int(chunk)) { return false }
+                            done += chunk
+                        }
                     }
+                    return true
                 }
             }
             item.io.unlock(); reply(nil)
         } catch {
-            item.operation = nil; item.extents.removeAll(keepingCapacity: true); item.io.broadcast(); item.io.unlock(); reply(error)
+            item.finishMapping(operationID); item.io.unlock(); reply(error)
         }
     }
     // SDK 27 incorrectly annotates status nonnull; its own contract specifies
     // nil for success. Keep Optional to avoid trapping on successful I/O.
     func completeIO(for file: FSItem, offset: off_t, length: Int, status: (any Error)?, flags: FSCompleteIOFlags, operationID: FSOperationID, replyHandler reply: @escaping ((any Error)?) -> Void) {
-        let item = node(file); item.io.lock()
+        let item = node(file)
         do {
-            try serial {
-                try device.purge(item.extents)
+            guard offset >= 0 else { throw POSIXError(.EINVAL) }
+            try item.completing(operationID) { try serial {
+                var cachedExtents: [nb_extent] = []
+                let tracked = operationID != .unspecified && item.operation == operationID
+                if !tracked {
+                    try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: false) {
+                        cachedExtents.append(contentsOf: $0); return true
+                    }
+                }
+                try device.purge(tracked ? item.extents : cachedExtents)
                 try check(api.nb_complete_io!(core, item.ref, UInt64(offset), UInt64(length), status.map { Int32(($0 as NSError).code) } ?? 0, flags.contains(.write) ? 1 : 0))
-                try device.purge(item.extents)
-            }
-            item.operation = nil; item.extents.removeAll(keepingCapacity: true); item.io.broadcast(); item.io.unlock(); reply(nil)
-        } catch {
-            item.operation = nil; item.extents.removeAll(keepingCapacity: true); item.io.broadcast(); item.io.unlock(); reply(error)
-        }
+                try device.purge(tracked ? item.extents : cachedExtents)
+            } }
+            reply(nil)
+        } catch { reply(error) }
     }
     func createFile(name: FSFileName, in directory: FSItem, attributes: FSItem.SetAttributesRequest, packer: FSExtentPacker, replyHandler: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) { createItem(named: name, type: .file, inDirectory: directory, attributes: attributes, replyHandler: replyHandler) }
     func lookupItem(name: FSFileName, in directory: FSItem, packer: FSExtentPacker, replyHandler: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) { lookupItem(named: name, inDirectory: directory, replyHandler: replyHandler) }

@@ -69,7 +69,7 @@ final class YuzuNTFSDevice {
         } catch { return Int32((error as NSError).code) }
     }
     /// Purge only engine-touched sectors before handing them to kernel data I/O.
-    func purge(_ extents: [nb_extent]) throws {
+    func purge<Extents: Collection>(_ extents: Extents) throws where Extents.Element == nb_extent {
         lock.lock(); defer { lock.unlock() }
         guard metadataActive else { return }
         let sector = Int64(resource.blockSize)

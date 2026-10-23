@@ -107,5 +107,10 @@ typedef struct nb_engine {
   int (*nb_setattr)(nb_volume *, uint64_t ref, const nb_attr *, uint32_t valid);
   int (*nb_rename)(nb_volume *, uint64_t from_dir, const uint16_t *, size_t,
                    uint64_t to_dir, const uint16_t *, size_t);
+  /* Retain an inode by ref until release; unlink/rename replacement cannot
+   * recycle its MFT record or allocation while held. Balanced, counted holds;
+   * unmount releases outstanding holds before tearing down the core. */
+  int (*nb_hold)(nb_volume *, uint64_t ref);
+  int (*nb_release)(nb_volume *, uint64_t ref);
 } nb_engine;
 #endif

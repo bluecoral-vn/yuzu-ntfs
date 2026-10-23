@@ -14,15 +14,32 @@ int e2_map(ntfs_inode_t *, uint64_t, uint64_t, int, nb_extent *, size_t, size_t 
 int e2_prepare(ntfs_inode_t *, uint64_t, uint64_t);
 int e2_finish(ntfs_inode_t *, uint64_t, uint64_t);
 struct stream { uint64_t ref, base; char *name; struct stream *next; };
+struct held_inode { uint64_t ref; ntfs_inode_t *inode; size_t count; struct held_inode *next; };
 struct nb_volume {
     nb_blockdev dev;
     struct ntfs_bdev bdev;
     ntfs_volume_t *core;
     uint64_t root;
     struct stream *streams;
+    struct held_inode *held;
     pthread_mutex_t lock;
 };
 static int positive(int rc) { return rc < 0 ? -rc : rc; }
+/* TT's public inode_get rejects nlink==0 even while the inode is held.
+ * Resolve retained FSKit handles before falling back to namespace lookup. */
+static int inode_get(nb_volume *v, uint64_t ref, ntfs_inode_t **out) {
+    pthread_mutex_lock(&v->lock);
+    for (struct held_inode *h = v->held; h; h = h->next) {
+        if (h->ref == ref) {
+            ntfs_inode_ref(h->inode);
+            *out = h->inode;
+            pthread_mutex_unlock(&v->lock);
+            return 0;
+        }
+    }
+    pthread_mutex_unlock(&v->lock);
+    return ntfs_inode_get(v->core, ref, out);
+}
 static ssize_t device_read(struct ntfs_bdev *b, void *buf, size_t n, uint64_t off) {
     nb_volume *v = b->priv;
     int rc = v->dev.read(v->dev.ctx, off, buf, n);
@@ -121,6 +138,12 @@ int nb_e2_mount(const nb_blockdev *dev, int rw, nb_volume **out) {
 }
 int nb_e2_unmount(nb_volume *v) {
     if (!v) return EINVAL;
+    while (v->held) {
+        struct held_inode *h = v->held;
+        v->held = h->next;
+        ntfs_inode_put(h->inode);
+        free(h);
+    }
     int rc = positive(ntfs_unmount(v->core));
     ntfs_bdev_detach_mapping(&v->bdev);
     while (v->streams) { struct stream *s = v->streams; v->streams = s->next; free(s->name); free(s); }
@@ -238,7 +261,7 @@ int nb_e2_read(nb_volume *v, uint64_t ref, uint64_t off, void *buf, size_t len, 
         ntfs_inode_put(inode); pthread_mutex_unlock(&v->lock); return rc;
     }
     ntfs_inode_t *inode;
-    int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     ssize_t n = ntfs_read(inode, buf, len, off);
     ntfs_inode_put(inode);
@@ -267,7 +290,7 @@ int nb_e2_write(nb_volume *v, uint64_t ref, uint64_t off, const void *buf, size_
     if (!v || (!buf && len)) return EINVAL;
     if (off > INT64_MAX || len > (uint64_t)INT64_MAX - off) return EFBIG;
     if (ref >> 63) return ENOTSUP;
-    ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     size_t done = 0;
     while (done < len) {
@@ -281,7 +304,7 @@ int nb_e2_truncate(nb_volume *v, uint64_t ref, uint64_t size) {
     if (!v) return EINVAL;
     if (size > INT64_MAX) return EFBIG;
     if (ref >> 63) return ENOTSUP;
-    ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     rc = positive(ntfs_truncate(inode, size)); ntfs_inode_put(inode); return rc;
 }
@@ -291,7 +314,7 @@ int nb_e2_blockmap(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, int f
     if (off > INT64_MAX || len > (uint64_t)INT64_MAX - off) return EFBIG;
     if (ref >> 63) return ENOTSUP;
     if (for_write && v->bdev.read_only) return EROFS;
-    ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     if (for_write) rc = e2_writable(inode);
     if (!rc) rc = positive(ntfs_fsync(inode, false));
@@ -308,7 +331,7 @@ int nb_e2_complete_io(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, in
     if (status) return positive(status);
     if (!for_write) return 0;
     if (v->bdev.read_only) return EROFS;
-    ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     rc = e2_writable(inode);
     if (!rc) rc = e2_finish(inode, off, len);
@@ -322,7 +345,7 @@ static int nb_e2_getattr(nb_volume *v, uint64_t ref, uint64_t parent, nb_attr *o
     if (!v || !out) return EINVAL;
     if (ref >> 63) return ENOTSUP;
     ntfs_inode_t *inode = NULL;
-    int rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    int rc = positive(inode_get(v, ref, &inode));
     struct ntfs_attr a;
     if (!rc) rc = positive(ntfs_getattr(inode, &a));
     if (!rc) attr_out(&a, parent, e2_resident(inode), out);
@@ -376,7 +399,7 @@ static int nb_e2_setattr(nb_volume *v, uint64_t ref, const nb_attr *a, uint32_t 
         | ((valid & NB_SET_MTIME) ? NTFS_SETATTR_MTIME : 0)
         | ((valid & NB_SET_CRTIME) ? NTFS_SETATTR_CRTIME : 0);
     ntfs_inode_t *inode = NULL;
-    rc = positive(ntfs_inode_get(v->core, ref, &inode));
+    rc = positive(inode_get(v, ref, &inode));
     /* TT's size path overwrites mtime; apply explicit timestamps afterward. */
     if (!rc && (bits & NTFS_SETATTR_SIZE))
         rc = positive(ntfs_setattr(inode, &attr, NTFS_SETATTR_SIZE));
@@ -399,10 +422,46 @@ static int nb_e2_rename(nb_volume *v, uint64_t from, const uint16_t *old, size_t
     ntfs_inode_put(a); ntfs_inode_put(b);
     return rc;
 }
+static int nb_e2_hold(nb_volume *v, uint64_t ref) {
+    if (!v || ref >> 63) return EINVAL;
+    pthread_mutex_lock(&v->lock);
+    struct held_inode *h;
+    for (h = v->held; h && h->ref != ref; h = h->next) {}
+    int rc = 0;
+    if (h) {
+        if (h->count == SIZE_MAX) rc = EOVERFLOW;
+        else ++h->count;
+    } else {
+        h = calloc(1, sizeof(*h));
+        if (!h) rc = ENOMEM;
+        else {
+            rc = positive(ntfs_inode_get(v->core, ref, &h->inode));
+            if (rc) free(h);
+            else { h->ref = ref; h->count = 1; h->next = v->held; v->held = h; }
+        }
+    }
+    pthread_mutex_unlock(&v->lock);
+    return rc;
+}
+static int nb_e2_release(nb_volume *v, uint64_t ref) {
+    if (!v) return EINVAL;
+    pthread_mutex_lock(&v->lock);
+    struct held_inode **link = &v->held;
+    while (*link && (*link)->ref != ref) link = &(*link)->next;
+    struct held_inode *h = *link;
+    if (!h) { pthread_mutex_unlock(&v->lock); return ENOENT; }
+    if (--h->count) { pthread_mutex_unlock(&v->lock); return 0; }
+    *link = h->next;
+    pthread_mutex_unlock(&v->lock);
+    ntfs_inode_put(h->inode);
+    free(h);
+    return 0;
+}
 static const nb_engine engine = {
     nb_e2_probe_state, nb_e2_mount, nb_e2_unmount, nb_e2_root_ref, nb_e2_lookup,
     nb_e2_readdir, nb_e2_read, nb_e2_create, nb_e2_write, nb_e2_truncate,
     nb_e2_blockmap, nb_e2_complete_io, nb_e2_sync,
-    nb_e2_getattr, nb_e2_remove, nb_e2_statfs, nb_e2_setattr, nb_e2_rename
+    nb_e2_getattr, nb_e2_remove, nb_e2_statfs, nb_e2_setattr, nb_e2_rename,
+    nb_e2_hold, nb_e2_release
 };
 const nb_engine *nb_engine_e2(void) { return &engine; }
