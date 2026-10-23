@@ -46,10 +46,14 @@ int nb_sync(nb_volume *v);
  * Return values are positive errno (zero success); device callbacks likewise.
  * A nonzero dirent callback consumes that entry and stops enumeration. Resume
  * with its next_cookie. Names are UTF-16 code units, never NUL-terminated.
- * Blockmap offsets/lengths are bytes. T5-R1/T5-R2:
+ * Blockmap offsets/lengths are bytes. T5-R1/T5-R2/T5-R3:
  * - for_write allocates every hole/unallocated part of [off, off+len), without
  *   pre-zeroing the kernel's write range and without publishing new EOF/VDL.
  *   Allocated bytes at/after initialized_size are NB_EXT_UNINIT.
+ *   Exception (T5-R3): newly materialized sparse clusters are zero-filled for
+ *   their portion BELOW the existing initialized_size before returning a
+ *   mapping, including payload bytes, so an abandoned/failed raw write cannot
+ *   expose recycled disk contents. Beyond-VDL payload is not pre-zeroed.
  * - Read mapping never allocates: holes are NB_EXT_HOLE; allocated bytes in
  *   [initialized_size, size) are NB_EXT_UNINIT and MUST be zero-filled by caller.
  * - Successful write completion raises initialized_size and size to their
@@ -58,6 +62,8 @@ int nb_sync(nb_volume *v);
  *   may remain holes) and flushes payload/gap BEFORE publishing the new VDL.
  * - Failed completion preserves both sizes; allocated clusters may remain.
  * - Resident/compressed/encrypted mappings return ENOTSUP; use read/write.
+ * - Write mappings/completion reject a currently read-only or shut-down core
+ *   with EROFS, including an errors=remount-ro transition after mount.
  * Callers serialize offloaded I/O with writes, truncate and other offloaded
  * ranges for that inode until completion (including failed completion).
  */

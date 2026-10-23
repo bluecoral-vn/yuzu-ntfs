@@ -47,8 +47,23 @@ private func tool(_ name: String, _ arguments: [String]) throws -> Data {
     return data
     }
 }
+private final class DeviceIO {
+    let fd: Int32
+    private let lock = NSLock()
+    private var failingReads = false
+    private var writes = 0
+    init(fd: Int32) { self.fd = fd }
+    var failReads: Bool {
+        get { lock.withLock { failingReads } }
+        set { lock.withLock { failingReads = newValue } }
+    }
+    var writeCount: Int { lock.withLock { writes } }
+    func recordWrite() { lock.withLock { writes += 1 } }
+}
+
 private final class Image {
     let fd: Int32
+    let io: DeviceIO
     let url: URL
     let temporary: Bool
     var dev: nb_blockdev
@@ -59,10 +74,13 @@ private final class Image {
         if copy { try FileManager.default.copyItem(at: original, to: url) }
         fd = open(url.path, copy ? O_RDWR : O_RDONLY)
         try #require(fd >= 0)
+        io = DeviceIO(fd: fd)
         var stat = Darwin.stat()
         try #require(fstat(fd, &stat) == 0)
-        dev = nb_blockdev(ctx: UnsafeMutableRawPointer(bitPattern: Int(fd) + 1), size: UInt64(stat.st_size), sector_size: name == "4kn" ? 4096 : 512, read: { ctx, off, buf, len in
-            let fd = Int32(Int(bitPattern: ctx) - 1)
+        dev = nb_blockdev(ctx: Unmanaged.passUnretained(io).toOpaque(), size: UInt64(stat.st_size), sector_size: name == "4kn" ? 4096 : 512, read: { ctx, off, buf, len in
+            let io = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue()
+            if io.failReads { return EIO }
+            let fd = io.fd
             var done = 0
             while done < len {
                 let n = pread(fd, buf!.advanced(by: done), len - done, off_t(off) + off_t(done))
@@ -72,7 +90,9 @@ private final class Image {
             }
             return 0
         }, write: { ctx, off, buf, len in
-            let fd = Int32(Int(bitPattern: ctx) - 1)
+            let io = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue()
+            io.recordWrite()
+            let fd = io.fd
             var done = 0
             while done < len {
                 let n = pwrite(fd, buf!.advanced(by: done), len - done, off_t(off) + off_t(done))
@@ -81,7 +101,10 @@ private final class Image {
                 done += n
             }
             return 0
-        }, flush: { ctx in fsync(Int32(Int(bitPattern: ctx) - 1)) == 0 ? 0 : errno })
+        }, flush: { ctx in
+            let fd = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue().fd
+            return fsync(fd) == 0 ? 0 : errno
+        })
     }
     deinit { close(fd); if temporary { try? FileManager.default.removeItem(at: url) } }
 }
@@ -333,5 +356,70 @@ struct BridgeConformanceTests {
         #expect(mounted.api.nb_read!(mounted.volume, attr.ref, UInt64.max, &byte, 1, &got) == EFBIG)
         #expect(got == 0)
         #expect(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64.max, &byte, 0) == EFBIG)
+    }
+    @Test(arguments: Engine.allCases) func materializedSparseHolePreservesZeroEdges(engine: Engine) throws {
+        for completed in [false, true] {
+            let mounted = try Mounted(engine, "basic-512", write: true)
+            let name = Array("sparse.bin".utf16)
+            var attr = nb_attr()
+            try #require(name.withUnsafeBufferPointer { mounted.api.nb_create!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, NB_FILE, &attr) } == 0)
+            let fileSize = 65536
+            try #require(mounted.api.nb_truncate!(mounted.volume, attr.ref, UInt64(fileSize)) == 0)
+            var marker: UInt8 = 0x7c
+            try #require(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64(fileSize - 1), &marker, 1) == 0)
+            try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+            // Poison every reusable cluster, not just a cluster the allocator
+            // might choose. The allocated bitmap and metadata are left intact.
+            let bitmap = try mounted.read(mounted.lookup("/$Bitmap"))
+            var boot = [UInt8](repeating: 0, count: 512)
+            try #require(pread(mounted.image.fd, &boot, boot.count, 0) == boot.count)
+            let sector = Int(boot[11]) | Int(boot[12]) << 8
+            let cluster = sector * Int(boot[13])
+            let poison = Data(repeating: 0xcc, count: cluster)
+            let clusters = Int(mounted.image.dev.size) / cluster
+            for index in 0..<min(clusters, bitmap.count * 8) where bitmap[index / 8] & (1 << (index % 8)) == 0 {
+                try #require(poison.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(index * cluster)) } == cluster)
+            }
+            let offset = cluster + 17
+            let payload = Data(repeating: 0x6a, count: 23)
+            var extent = nb_extent()
+            var count = 0
+            try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == 0)
+            try #require(count == 1)
+            if completed {
+                try #require(payload.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
+            }
+            try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), completed ? 0 : EIO, 1) == (completed ? 0 : EIO))
+            try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+            try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
+            mounted.volume = nil
+            try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
+            var expected = Data(count: fileSize)
+            expected[fileSize - 1] = marker
+            if completed { expected.replaceSubrange(offset..<(offset + payload.count), with: payload) }
+            #expect(try mounted.read(mounted.lookup("/sparse.bin")) == expected)
+            #expect(try tool("ntfscat", [mounted.image.url.path, "/sparse.bin"]) == expected)
+        }
+    }
+
+    @Test(arguments: Engine.allCases) func metadataFaultReadOnlyRejectsRawMutation(engine: Engine) throws {
+        let mounted = try Mounted(engine, "bigdir", write: true)
+        let (attr, _) = try writeFile(mounted)
+        let entry = try #require(manifest("bigdir").last)
+        let units = Array(entry.path.dropFirst().utf16)
+        var ignored = nb_attr()
+        mounted.image.io.failReads = true
+        let fault = units.withUnsafeBufferPointer { mounted.api.nb_lookup!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, &ignored) }
+        mounted.image.io.failReads = false
+        try #require(fault == EIO)
+        // The buffered path already observes TT's actual SB_RDONLY flag.
+        var byte: UInt8 = 1
+        try #require(mounted.api.nb_write!(mounted.volume, attr.ref, 0, &byte, 1) == EROFS)
+        let before = mounted.image.io.writeCount
+        var extent = nb_extent()
+        var count = 0
+        #expect(mounted.api.nb_blockmap!(mounted.volume, attr.ref, attr.alloc_size, 4096, 1, &extent, 1, &count) == EROFS)
+        #expect(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 4096, 0, 1) == EROFS)
+        #expect(mounted.image.io.writeCount == before)
     }
 }

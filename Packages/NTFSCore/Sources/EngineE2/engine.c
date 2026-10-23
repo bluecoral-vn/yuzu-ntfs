@@ -8,6 +8,7 @@
 #include <pthread.h>
 
 int e2_resident(ntfs_inode_t *);
+int e2_writable(ntfs_inode_t *);
 int e2_map(ntfs_inode_t *, uint64_t, uint64_t, int, nb_extent *, size_t, size_t *);
 int e2_prepare(ntfs_inode_t *, uint64_t, uint64_t);
 int e2_finish(ntfs_inode_t *, uint64_t, uint64_t);
@@ -286,7 +287,8 @@ int nb_e2_blockmap(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, int f
     if (for_write && v->bdev.read_only) return EROFS;
     ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
     if (rc) return rc;
-    rc = positive(ntfs_fsync(inode, false));
+    if (for_write) rc = e2_writable(inode);
+    if (!rc) rc = positive(ntfs_fsync(inode, false));
     if (!rc && for_write) rc = e2_prepare(inode, off, len);
     if (!rc) rc = e2_map(inode, off, len, for_write, out, cap, count);
     ntfs_inode_put(inode); return rc;
@@ -298,7 +300,8 @@ int nb_e2_complete_io(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, in
     if (v->bdev.read_only) return EROFS;
     ntfs_inode_t *inode; int rc = positive(ntfs_inode_get(v->core, ref, &inode));
     if (rc) return rc;
-    rc = e2_finish(inode, off, len);
+    rc = e2_writable(inode);
+    if (!rc) rc = e2_finish(inode, off, len);
     if (!rc) rc = positive(ntfs_fsync(inode, false));
     ntfs_inode_put(inode);
     if (!rc) rc = positive(ntfs_volume_sync(v->core));

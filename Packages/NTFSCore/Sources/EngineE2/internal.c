@@ -18,6 +18,14 @@
 
 int e2_resident(ntfs_inode_t *h) { return !NInoNonResident(NTFS_I((struct inode *)h)); }
 
+int e2_writable(ntfs_inode_t *h)
+{
+    struct inode *vi = (struct inode *)h;
+    return IS_RDONLY(vi) || NVolShutdown(NTFS_I(vi)->vol) ? EROFS : 0;
+}
+
+static int zero_gap(struct ntfs_inode *ni, uint64_t start, uint64_t end);
+
 /* Caller holds i_rwsem exclusive and mrec_lock. No data is zeroed here. */
 static int set_sizes(struct ntfs_inode *ni, uint64_t data, uint64_t initialized)
 {
@@ -45,6 +53,7 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len)
     if (off > INT64_MAX || len > (uint64_t)INT64_MAX - off) return EFBIG;
     inode_lock(vi);
     int err = 0;
+    if (e2_writable(h)) { err = -EROFS; goto done; }
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
     if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY)) {
@@ -73,6 +82,15 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len)
         mutex_unlock(&ni->mrec_lock);
         if (err) break;
         if (count <= 0 || lcn < 0) { err = -EIO; break; }
+        /* A materialized hole below VDL must retain its zero semantics even
+         * when the offloaded write never happens. T5-R3 permits pre-zeroing
+         * this already-valid portion, including payload, before mapping. */
+        uint64_t first = (uint64_t)vcn * cluster;
+        uint64_t last = min_t(uint64_t, old_init, (uint64_t)(vcn + count) * cluster);
+        if (allocated && first < last) {
+            err = zero_gap(ni, first, last);
+            if (err) break;
+        }
         vcn += count;
     }
 done:
@@ -130,6 +148,7 @@ int e2_finish(ntfs_inode_t *h, uint64_t off, uint64_t len)
     if (off > INT64_MAX || len > (uint64_t)INT64_MAX - off) return EFBIG;
     inode_lock(vi);
     int err = 0;
+    if (e2_writable(h)) { err = -EROFS; goto done; }
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
     if (off + len > (uint64_t)ni->allocated_size) { err = -EINVAL; goto done; }
