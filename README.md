@@ -20,7 +20,7 @@ swift build --package-path Packages/NTFSCore
 
 After generating the offline fixtures below, run `swift test --package-path Packages/NTFSCore`; repeat with `--sanitize=address` and `--sanitize=undefined` for sanitizer checks. Missing fixture images fail with instructions to run `scripts/make-fixtures.sh`, rather than skipping coverage.
 
-The result is `build/Build/Products/Debug/YuzuNTFS.app`, containing `Contents/Extensions/YuzuNTFSModule.appex`. Debug explicitly ad-hoc signs the module with its FSKit and sandbox entitlements: Xcode's normal signing path requires a provisioning profile even with identity `-`. This verifies packaging only, **not OS approval or extension loading**. Provisioned signing and runtime mounting are later spike tasks; no SIP/security changes are needed or recommended here. Release signing is not configured for distribution.
+The result is `build/Build/Products/Debug/YuzuNTFS.app`, containing `Contents/Extensions/YuzuNTFSModule.appex`. Debug explicitly ad-hoc signs the module with its FSKit and sandbox entitlements: Xcode's normal signing path requires a provisioning profile even with identity `-`. This verifies packaging only, **not OS approval or extension loading**. `Release-Direct` uses manual Developer ID profiles, hardened runtime, and secure timestamps; run `scripts/setup-signing.sh` to register only this project's IDs and install profiles using an existing identity and the configured App Store Connect API key. No certificate or private key is created. No SIP/security changes are needed or recommended. See [R1 enablement findings](docs/spikes/p0-r1-enable.md) for notarization, runtime evidence, owner-only Settings steps, and the unresolved macOS 26 gate.
 
 ## Offline test corpus
 
