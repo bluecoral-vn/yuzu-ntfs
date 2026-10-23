@@ -1,0 +1,14 @@
+# Generated fixtures and locally built third-party tools
+/fixtures/
+/tools/bin/
+/vendor/
+# XcodeGen and build products
+/*.xcodeproj/
+/build/
+/DerivedData/
+**/.build/
+**/.swiftpm/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+.superpowers/

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleName</key><string>Yuzu NTFS</string>
+    <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>EXAppExtensionAttributes</key>
+    <dict>
+        <key>EXExtensionPointIdentifier</key><string>com.apple.fskit.fsmodule</string>
+        <key>FSShortName</key><string>yuzuntfs</string>
+        <key>FSSupportsBlockResources</key><true/>
+        <key>FSPersonalities</key>
+        <dict>
+            <key>NTFS</key>
+            <dict>
+                <key>FSName</key><string>Yuzu NTFS</string>
+                <key>FSSubType</key><integer>0</integer>
+                <key>FSIsCaseSensitive</key><false/>
+                <key>FSIsCasePreserving</key><true/>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>
