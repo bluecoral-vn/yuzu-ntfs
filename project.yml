@@ -90,6 +90,10 @@ targets:
     dependencies:
       - package: NTFSCore
         product: NTFSProbe
+      - package: NTFSCore
+        product: EngineE2
+      - package: NTFSCore
+        product: NTFSBridge
       - sdk: FSKit.framework
       - sdk: ExtensionFoundation.framework
 schemes:

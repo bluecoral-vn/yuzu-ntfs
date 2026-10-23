@@ -30,11 +30,22 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
 
     func loadResource(resource: FSResource, options: FSTaskOptions,
                       replyHandler: @escaping (FSVolume?, (any Error)?) -> Void) {
-        replyHandler(nil, POSIXError(.ENOTSUP))
+        guard let device = resource as? FSBlockDeviceResource else { replyHandler(nil, POSIXError(.ENODEV)); return }
+        do {
+            let count = max(4096, Int(device.blockSize))
+            let buffer = UnsafeMutableRawPointer.allocate(byteCount: count, alignment: 4096)
+            defer { buffer.deallocate() }
+            let actual = try device.read(into: UnsafeMutableRawBufferPointer(start: buffer, count: count), startingAt: 0, length: count)
+            let boot = try NTFSBootSector.parse(UnsafeRawBufferPointer(start: buffer, count: actual))
+            let volume = YuzuNTFSVolume(device: device, boot: boot, readOnly: options.taskOptions.contains("--rdonly"))
+            containerStatus = .ready
+            replyHandler(volume, nil)
+        } catch { replyHandler(nil, error) }
     }
 
     func unloadResource(resource: FSResource, options: FSTaskOptions,
                         replyHandler: @escaping ((any Error)?) -> Void) {
+        containerStatus = .notReady(status: POSIXError(.ENOTCONN))
         replyHandler(nil)
     }
 }
