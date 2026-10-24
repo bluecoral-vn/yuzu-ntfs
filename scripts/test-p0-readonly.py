@@ -25,6 +25,20 @@ class ReadOnlyAcceptance(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             guest.check_mount_identity({**actual, 'ReadOnlyVolume': False}, line, '/dev/disk12', Path('/tmp/owned-ro'), True)
 
+    def test_recorded_ntfs_personality_agrees_with_yuzuntfs_mount(self):
+        mount = Path('/Users/rom/Projects/yuzu-ntfs-p0/build/p0-guest/ade18435-844e-4134-a18f-52874b22771d/basic-512-ro-mount')
+        actual = {'DeviceNode': '/dev/disk14', 'MountPoint': str(mount),
+                  'FilesystemType': 'ntfs', 'WritableVolume': False}
+        line = f'/dev/disk14 on {mount} (yuzuntfs, local, nodev, nosuid, read-only, noowners, noatime, fskit, mounted by rom)\n'
+        guest.check_mount_identity(actual, line, '/dev/disk14', mount, True)
+        for kind in ('msdos', 'exfat', 'apfs'):
+            with self.assertRaises(RuntimeError):
+                guest.check_mount_identity({**actual, 'FilesystemType': kind}, line, '/dev/disk14', mount, True)
+        for bad in (line.replace('yuzuntfs', 'ntfs'), line.replace('/dev/disk14', '/dev/disk15'),
+                    line.replace('read-only, ', '')):
+            with self.assertRaises(RuntimeError):
+                guest.check_mount_identity(actual, bad, '/dev/disk14', mount, True)
+
     def test_plist_stdout_survives_recorded_hdiutil_stderr(self):
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk12</string></dict></array></dict></plist>\n'
         warning = "hdiutil: WARNING: 'hdiutil attach -nomount ...' is deprecated. Please use 'diskutil image attach --noMount ...' instead.\n"

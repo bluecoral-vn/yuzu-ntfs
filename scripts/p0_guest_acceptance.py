@@ -81,7 +81,8 @@ def check_mount_identity(actual, mounts, device, mount, readonly):
         if key in actual:
             value = actual[key]
             if key == 'FilesystemType':
-                value = value.lower()
+                # diskutil may report the NTFS personality, not the serving driver.
+                value = 'yuzuntfs' if value.lower() == 'ntfs' else value.lower()
             require(value == expected, f'Conflicting diskutil mount field: {key}')
     print('Verified owned mount:', rows[0], flush=True)
 
