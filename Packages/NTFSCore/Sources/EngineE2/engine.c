@@ -10,6 +10,7 @@
 int e2_resident(ntfs_inode_t *);
 int e2_reserved(ntfs_inode_t *);
 int e2_sparse(ntfs_inode_t *);
+int e2_unaligned_vdl(ntfs_inode_t *);
 int e2_resize(ntfs_inode_t *, uint64_t);
 void e2_force_readonly(ntfs_inode_t *);
 int e2_free_space_ready(ntfs_inode_t *);
@@ -238,6 +239,7 @@ int nb_e2_lookup(nb_volume *v, uint64_t dir, const uint16_t *name, size_t len, n
     if (!rc) rc = positive(ntfs_getattr(inode, &a));
     if (!rc) attr_out(&a, dir, e2_resident(inode), out);
     if (!rc && e2_reserved(inode)) out->flags |= NB_READ_ONLY;
+    if (!rc && e2_unaligned_vdl(inode)) out->flags |= NB_UNALIGNED_VDL;
     if (!rc && stream_name) {
         size_t size;
         rc = positive(ntfs_getxattr(inode, stream_name, NULL, 0, &size));
@@ -274,6 +276,7 @@ static int directory_entry(const struct ntfs_dirent *ent, void *opaque) {
     if (c->err) return 1;
     nb_attr attr; attr_out(&ent->attr, c->parent, e2_resident(inode), &attr);
     if (e2_reserved(inode)) attr.flags |= NB_READ_ONLY;
+    if (e2_unaligned_vdl(inode)) attr.flags |= NB_UNALIGNED_VDL;
     ntfs_inode_put(inode);
     /* TT's cookie points at this entry. Its scanner resumes at positions >=
      * cookie, so +1 is the first position after the consumed entry. */
@@ -453,6 +456,7 @@ static int nb_e2_getattr(nb_volume *v, uint64_t ref, uint64_t parent, nb_attr *o
     if (!rc) rc = positive(ntfs_getattr(inode, &a));
     if (!rc) attr_out(&a, parent, e2_resident(inode), out);
     if (!rc && e2_reserved(inode)) out->flags |= NB_READ_ONLY;
+    if (!rc && e2_unaligned_vdl(inode)) out->flags |= NB_UNALIGNED_VDL;
     ntfs_inode_put(inode);
     return rc;
 }

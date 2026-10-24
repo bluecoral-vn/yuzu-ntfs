@@ -46,6 +46,8 @@ import NTFSBridge
     #expect(!YuzuNTFSVolume.inhibitsIO(flags: 0, writable: false))
     #expect(!YuzuNTFSVolume.inhibitsIO(flags: UInt32(NB_RESIDENT), writable: true))
     #expect(YuzuNTFSVolume.inhibitsIO(flags: UInt32(NB_RESIDENT), writable: false))
+    #expect(YuzuNTFSVolume.inhibitsIO(flags: UInt32(NB_UNALIGNED_VDL), writable: false))
+    #expect(!YuzuNTFSVolume.inhibitsIO(flags: UInt32(NB_UNALIGNED_VDL), writable: true))
     for flag in [UInt32(NB_SPARSE), UInt32(NB_READ_ONLY), UInt32(NB_COMPRESSED), UInt32(NB_ENCRYPTED), UInt32(NB_RESIDENT | NB_COMPRESSED)] {
         #expect(YuzuNTFSVolume.inhibitsIO(flags: flag, writable: true))
         #expect(YuzuNTFSVolume.inhibitsIO(flags: flag, writable: false))

@@ -39,6 +39,8 @@ final class YuzuNTFSItem: FSItem {
     let ref: UInt64
     var parent: UInt64
     var version: UInt64 = 1
+    // Q-R1: fixed before first publication, never a read-only revocation tool.
+    var inhibitsKernelIO: Bool?
     let io = NSCondition()
     private let completionLock = NSLock()
     // One explicit operation owns the inode lease; repeated maps with the same
@@ -107,6 +109,7 @@ final class YuzuNTFSItemTable {
             reply(item)
         }
     }
+    func existing(ref: UInt64) -> YuzuNTFSItem? { withLock { items[ref]?.item } }
     func item(ref: UInt64, parent: UInt64) -> YuzuNTFSItem {
         withLock {
             if let item = items[ref]?.item { return item }

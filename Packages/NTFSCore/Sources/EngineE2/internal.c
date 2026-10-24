@@ -20,6 +20,12 @@ int e2_grow_non_sparse(struct ntfs_inode *, s64);
 
 int e2_resident(ntfs_inode_t *h) { return !NInoNonResident(NTFS_I((struct inode *)h)); }
 int e2_sparse(ntfs_inode_t *h) { return NInoSparse(NTFS_I((struct inode *)h)); }
+int e2_unaligned_vdl(ntfs_inode_t *h)
+{
+    struct ntfs_inode *ni = NTFS_I((struct inode *)h);
+    return NInoNonResident(ni) && ni->initialized_size < ni->data_size &&
+        ni->initialized_size % ni->vol->sb->s_bdev->logical_block_size != 0;
+}
 void e2_force_readonly(ntfs_inode_t *h)
 {
     struct inode *vi = (struct inode *)h;
@@ -267,6 +273,12 @@ int e2_finish(ntfs_inode_t *h, uint64_t off, uint64_t len)
     err = invalidate_inode_pages2_range(vi->i_mapping, first / PAGE_SIZE, (off + len - 1) / PAGE_SIZE);
     if (err) goto done;
     if (off > (uint64_t)ni->initialized_size) err = zero_gap(ni, ni->initialized_size, off);
+    /* Complete the partial device block before publishing VDL. This does not
+     * pre-zero the submitted payload; T7-R5's unreported-write limit remains. */
+    uint64_t initialized = max_t(uint64_t, ni->initialized_size, off + len);
+    uint64_t sector = ni->vol->sb->s_bdev->logical_block_size;
+    uint64_t aligned = min_t(uint64_t, round_up(initialized, sector), ni->allocated_size);
+    if (!err && initialized < aligned) err = zero_gap(ni, initialized, aligned);
     /* Both raw payload and gap zeros must reach the device before VDL changes. */
     if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
     if (err) goto done;
@@ -293,10 +305,24 @@ int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent
     *count = 0;
     if (len > UINT64_MAX - off) return EINVAL;
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) return ENOTSUP;
-    inode_lock_shared(vi);
-    if (off > (uint64_t)ni->allocated_size || len > (uint64_t)ni->allocated_size - off) { err = EINVAL; goto done; }
+    inode_lock(vi);
+    if (for_write && (off > (uint64_t)ni->allocated_size || len > (uint64_t)ni->allocated_size - off)) { err = EINVAL; goto done; }
+    uint64_t initialized = ni->initialized_size;
+    uint64_t sector = ni->vol->sb->s_bdev->logical_block_size;
+    uint64_t boundary = round_up(initialized, sector);
+    if (!for_write && initialized < (uint64_t)ni->data_size && initialized != boundary) {
+        if (e2_writable(h)) { err = ENOTSUP; goto done; }
+        err = zero_gap(ni, initialized, min_t(uint64_t, boundary, ni->allocated_size));
+        if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
+        if (err) { err = err < 0 ? -err : err; goto done; }
+    }
     end = off + len;
     while (pos < end) {
+        if (!for_write && pos >= (uint64_t)ni->allocated_size) {
+            if (used == cap) { err = ENOBUFS; break; }
+            out[used++] = (nb_extent){ .logical = pos, .length = end - pos, .kind = NB_EXT_HOLE };
+            break;
+        }
         struct runlist_element *run;
         down_write(&ni->runlist.lock);
         run = ntfs_attr_find_vcn_nolock(ni, pos / cluster, NULL);
@@ -305,9 +331,11 @@ int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent
         uint64_t next = run_end < end ? run_end : end;
         uint32_t kind = run->lcn == LCN_HOLE ? NB_EXT_HOLE : NB_EXT_DATA;
         if (run->lcn < 0 && run->lcn != LCN_HOLE) { err = EIO; up_write(&ni->runlist.lock); break; }
-        uint64_t initialized = ni->initialized_size;
-        if (kind == NB_EXT_DATA && pos >= initialized && (for_write || pos < (uint64_t)ni->data_size)) kind = NB_EXT_UNINIT;
-        if (pos < initialized && initialized < next && (for_write || initialized < (uint64_t)ni->data_size)) next = initialized;
+        if (for_write && kind == NB_EXT_DATA && pos >= initialized) kind = NB_EXT_UNINIT;
+        if (!for_write && kind == NB_EXT_DATA && initialized < (uint64_t)ni->data_size) {
+            if (pos >= boundary) kind = NB_EXT_UNINIT;
+            else if (boundary < next) next = boundary;
+        }
         if (used == cap) { err = ENOBUFS; up_write(&ni->runlist.lock); break; }
         out[used++] = (nb_extent){ .logical = pos,
             .physical = run->lcn < 0 ? 0 : (uint64_t)run->lcn * cluster + pos - (uint64_t)run->vcn * cluster,
@@ -317,7 +345,7 @@ int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent
         pos = next;
     }
 done:
-    inode_unlock_shared(vi);
+    inode_unlock(vi);
     *count = used;
     return err;
 }

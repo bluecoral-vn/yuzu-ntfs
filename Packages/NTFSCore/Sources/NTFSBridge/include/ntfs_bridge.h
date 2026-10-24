@@ -12,6 +12,7 @@
 #define NB_ENCRYPTED (1u << 2)
 #define NB_SPARSE (1u << 3)
 #define NB_READ_ONLY (1u << 4) /* Reserved NTFS metadata: buffered reads only. */
+#define NB_UNALIGNED_VDL (1u << 5) /* Partial initialized device block below EOF. */
 #define NB_EXT_DATA 1u
 #define NB_EXT_HOLE 2u
 #define NB_EXT_UNINIT 3u
@@ -73,7 +74,11 @@ int nb_sync(nb_volume *v);
  * Blockmap offsets/lengths are bytes. T5-R1/T5-R2/T5-R3:
  * - for_write allocates every hole/unallocated part of [off, off+len), without
  *   pre-zeroing the kernel's write range and without publishing new EOF/VDL.
- *   Allocated bytes at/after initialized_size are NB_EXT_UNINIT.
+ *   Write extents do not split at byte-granular VDL (both parts map as data).
+ *   Read splits round VDL up to a device block after zero/flush of its tail
+ *   on RW cores. RO partial-VDL-below-EOF files carry NB_UNALIGNED_VDL and
+ *   must be inhibited before publication; their read mapping is ENOTSUP.
+ *   Read ranges past allocation return NB_EXT_HOLE through the requested end.
  *   Exception (T5-R3): newly materialized sparse clusters are zero-filled for
  *   their portion BELOW the existing initialized_size before returning a
  *   mapping, including payload bytes, so an abandoned/failed raw write cannot
@@ -91,6 +96,8 @@ int nb_sync(nb_volume *v);
  *   respective max(current, off+len), persists metadata, and invalidates cached
  *   data. If off exceeds initialized_size, it first zeroes the gap (sparse holes
  *   may remain holes) and flushes payload/gap BEFORE publishing the new VDL.
+ *   Completion also zeroes the remainder of its partial device block before
+ *   VDL publication; exact EOF/VDL are not rounded. This retains T7-R5 below.
  *   T7-R5 P0 ordering: apply delivered completions in arrival order; never
  *   defer a completed cached write behind another operation's mapping lease.
  *   P1 OPEN: a higher completion may still zero a lower beyond-VDL write that

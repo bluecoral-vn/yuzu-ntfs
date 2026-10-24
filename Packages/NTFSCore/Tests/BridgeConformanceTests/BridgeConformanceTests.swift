@@ -167,6 +167,63 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
+    @Test func shortRawCompletionZerosPartialBlockBeforeVDLPublication() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("partial-block.bin".utf16)
+        var a = nb_attr(), e = nb_extent(), count = 0
+        try #require(m.api.nb_create!(m.volume, m.api.nb_root_ref!(m.volume), name, name.count, NB_FILE, &a) == 0)
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, 0, 512, 1, &e, 1, &count) == 0)
+        let poison = [UInt8](repeating: 0xA5, count: 512)
+        try #require(pwrite(m.image.fd, poison, poison.count, off_t(e.physical)) == 512)
+        try #require(m.api.nb_complete_io!(m.volume, a.ref, 0, 37, 0, 1) == 0)
+        var raw = [UInt8](repeating: 1, count: 512)
+        try #require(pread(m.image.fd, &raw, raw.count, off_t(e.physical)) == 512)
+        #expect(raw.prefix(37).allSatisfy { $0 == 0xA5 })
+        #expect(raw.dropFirst(37).allSatisfy { $0 == 0 })
+    }
+
+    @Test func midBlockVDLMapsAlignedAndPersistsZeros() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        var a = try m.lookup("resident.txt")
+        try #require(m.api.nb_truncate!(m.volume, a.ref, 37) == 0)
+        try #require(m.api.nb_truncate!(m.volume, a.ref, 8192) == 0)
+        var extents = [nb_extent](repeating: nb_extent(), count: 16), count = 0
+        for write: Int32 in [0, 1] {
+            try #require(m.api.nb_blockmap!(m.volume, a.ref, 0, 8192, write, &extents, 16, &count) == 0)
+            for e in extents.prefix(count) {
+                #expect(e.logical % 512 == 0)
+                #expect(e.length % 512 == 0)
+            }
+        }
+        try #require(m.api.nb_getattr!(m.volume, a.ref, a.parent_ref, &a) == 0)
+        let bytes = try m.read(a)
+        #expect(bytes.dropFirst(37).allSatisfy { $0 == 0 })
+        try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        let ro = try m.lookup("resident.txt")
+        #expect(ro.flags & UInt32(NB_UNALIGNED_VDL) != 0)
+        let writes = m.image.io.writeCount
+        #expect(m.api.nb_blockmap!(m.volume, ro.ref, 0, 8192, 0, &extents, 16, &count) == ENOTSUP)
+        #expect(m.image.io.writeCount == writes)
+        #expect(try m.read(m.lookup("resident.txt")) == bytes)
+    }
+
+    @Test func pageRoundedReadPastAllocationReturnsZeroTail() throws {
+        let m = try Mounted(.e2, "basic-512")
+        let a = try m.lookup("nonresident.bin")
+        var extents = [nb_extent](repeating: nb_extent(), count: 128), count = 0
+        let start = a.alloc_size - 512
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, start, 8704, 0, &extents, 128, &count) == 0)
+        #expect(extents.prefix(count).reduce(0) { $0 + $1.length } == 8704)
+        let last = try #require(extents.prefix(count).last)
+        #expect(last.logical == a.alloc_size)
+        #expect(last.length == 8192)
+        #expect(last.kind == NB_EXT_HOLE)
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, a.alloc_size + 4096, 4096, 0, &extents, 128, &count) == 0)
+        #expect(count == 1 && extents[0].kind == NB_EXT_HOLE)
+        #expect(m.image.io.writeCount == 0)
+    }
+
     @Test func bufferedGapGrowthStaysWritableAndNonSparse() throws {
         let m = try Mounted(.e2, "basic-512", write: true)
         let name = Array("buffered-gap.bin".utf16)

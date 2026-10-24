@@ -114,6 +114,49 @@ private final class ReplyOnce {
     attributesReply.assertOnce()
 }
 
+@Test func publishedResidentKeepsEligibilityAfterReadOnlyLatch() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    var root: FSItem?, published: FSItem?
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { root = $0; #expect($1 == nil) }
+    volume.lookupItem(named: FSFileName(string: "resident.txt"), inDirectory: try #require(root)) { published = $0; #expect($2 == nil) }
+    let item = try #require(published)
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { attributes, error in
+        #expect(error == nil); #expect(attributes?.inhibitKernelOffloadedIO == false)
+    }
+    core.readOnly = true
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { attributes, error in
+        #expect(error == nil); #expect(attributes?.inhibitKernelOffloadedIO == false)
+    }
+    let map = ReplyOnce(), complete = ReplyOnce(), write = ReplyOnce()
+    volume.blockmapFile(item, offset: 0, length: 512, flags: [.write], operationID: .unspecified,
+        packer: class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker, replyHandler: map.accept)
+    volume.completeIO(for: item, offset: 0, length: 512, status: nil, flags: [.write], operationID: .unspecified, replyHandler: complete.accept)
+    volume.write(contents: Data([1]), to: item, at: 0) { _, error in write.accept(error) }
+    for reply in [map, complete, write] {
+        reply.assertOnce(); #expect((reply.error as NSError?)?.code == Int(EROFS))
+    }
+}
+
+@Test func p0ForceReadOnlyHookLatchesOnNextReadOperation() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    let hook = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    volume.forceReadOnlyURL = hook
+    defer { try? FileManager.default.removeItem(at: hook) }
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    let item = YuzuNTFSItem(ref: 42, parent: 5)
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in #expect(error == nil) }
+    try Data().write(to: hook)
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in #expect(error == nil) }
+    try FileManager.default.removeItem(at: hook)
+    let write = ReplyOnce()
+    volume.write(contents: Data([1]), to: item, at: 0) { _, error in write.accept(error) }
+    write.assertOnce(); #expect((write.error as NSError?)?.code == Int(EROFS))
+    let readMap = ReplyOnce()
+    volume.blockmapFile(item, offset: 0, length: 512, flags: [], operationID: .unspecified,
+        packer: class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker, replyHandler: readMap.accept)
+    readMap.assertOnce(); #expect((readMap.error as NSError?)?.code == Int(EROFS))
+}
+
 @Test func initialAttributeFailureRollsBackCreatedEntryAndInvalidatesVerifier() throws {
     let core = HandlerCore(), volume = try core.volume()
     var root: FSItem?
