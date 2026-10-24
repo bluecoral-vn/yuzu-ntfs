@@ -43,8 +43,9 @@ final class YuzuNTFSItem: FSItem {
     var inhibitsKernelIO: Bool?
     let io = NSCondition()
     private let completionLock = NSLock()
-    // One explicit operation owns the inode lease; repeated maps with the same
-    // ID append extents. Unspecified/cached completions never own this lease.
+    // One explicit write owns the shrink-protection lease; repeated write maps
+    // with the same ID append extents. Read/unspecified maps never own a lease:
+    // the kernel may retain those mappings without a completion callback.
     var operation: FSOperationID?
     var extents: [nb_extent] = []
     var releasePin: (() -> Void)?

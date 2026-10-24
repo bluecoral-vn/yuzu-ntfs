@@ -364,12 +364,15 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         Self.p0Log.info("blockmapFile offset=\(offset) length=\(length) write=\(flags.contains(.write))")
         guard Self.validRange(offset: offset, length: length) else { reply(POSIXError(.EINVAL)); return }
         guard let item = file as? YuzuNTFSItem else { reply(POSIXError(.EINVAL)); return }
+        // Only explicit writes need a lease to protect their extents from
+        // shrink. Read mappings can be retained without a completeIO callback.
+        let leasesWrite = flags.contains(.write) && operationID != .unspecified
         item.io.lock()
-        if item.operation != nil && item.operation != operationID {
+        if flags.contains(.write) && item.operation != nil && item.operation != operationID {
             item.io.unlock(); reply(POSIXError(.EBUSY)); return
         }
         do {
-            if operationID != .unspecified { item.operation = operationID }
+            if leasesWrite { item.operation = operationID }
             try serial {
                 if !effectivelyWritable() && (flags.contains(.write) || length > 0) {
                     if flags.contains(.write) { throw POSIXError(.EROFS) }
@@ -381,7 +384,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 }
                 try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: flags.contains(.write)) { extents in
                     try device.purge(extents)
-                    if operationID != .unspecified { item.extents.append(contentsOf: extents) }
+                    if leasesWrite { item.extents.append(contentsOf: extents) }
                     for extent in extents {
                         let end = try YuzuNTFSBoundary.adding(extent.logical, extent.length)
                         _ = try YuzuNTFSBoundary.offset(end)
@@ -411,7 +414,8 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             }
             item.io.unlock(); reply(nil)
         } catch {
-            item.finishMapping(operationID); item.io.unlock(); reply(error)
+            if leasesWrite { item.finishMapping(operationID) }
+            item.io.unlock(); reply(error)
         }
     }
     // SDK 27 incorrectly annotates status nonnull; its own contract specifies

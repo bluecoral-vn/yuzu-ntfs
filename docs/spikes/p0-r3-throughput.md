@@ -618,3 +618,64 @@ Durable local evidence: `build/p0-host-ro-final-run-20261025.log`,
 `build/p0-guest/26b7b675-ad7a-4d31-bf18-363e052d1f4f/basic-512-ro-callbacks.log`.
 The EBUSY cause is not established here; these read-only results do not close
 the RO acceptance gate, RW, KOIO completion, VM or throughput gates.
+
+### Code-only correction — read mappings do not own write leases (2026-10-25)
+
+The earlier `5fc6222b-0b00-4711-a944-55d281560a3c` evidence directory stopped
+at mount identity, before reads; its callback log has only the filter header.
+The EBUSY read belongs to `26b7b675-ad7a-4d31-bf18-363e052d1f4f`:
+`build/p0-host-ro-final-run-20261025.log:2349` records errno 16, and that
+directory's `basic-512-ro-callbacks.log:4-5` records read blockmaps at 0 and
+1048576 without an intervening completion. These logs do not record operation
+IDs or per-callback reply errors, so they alone cannot prove ID values or that
+the kernel would never complete a read.
+
+The headless reproduction identifies the source: the pre-fix
+`Module/YuzuNTFSVolume.swift:372` registered **every** explicit operation,
+including reads. Its next different-ID blockmap hit the explicit EBUSY reply
+at lines 368–369. `YuzuNTFSItem.normal` also rejected buffered reads while that
+operation remained registered (line 55). Commit `70d2a9b` had replaced the
+cross-callback wait with this nonblocking EBUSY guard, but had preserved the
+incorrect read ownership. This is module lease admission, not an engine read
+error; the two-map reproducer fails at the second mapping with errno 16.
+
+Only explicit **write** mappings now register extents for shrink protection.
+Read mappings neither acquire/append to that lease nor reject another mapping's
+lease, and a failed read map cannot release a write lease. Existing write
+contention still replies EBUSY immediately; shrink still rejects overlapping
+outstanding write extents. No cross-callback wait was introduced.
+
+Three actual-volume/real-engine regressions (four cases) use disposable offline
+fixture copies, a test-only SDK resource/extent packer/data buffer, and no mount:
+
+- RO and RW: map 0 and 1048576 with different explicit IDs, omit every
+  `completeIO`, then buffered-read and map again; verify bytes and zero RO writes.
+- Read-map then shrink and unlink: shrink succeeds, published inode pin retains
+  the unlinked allocation, and another map resolves the same physical storage.
+- Outstanding write then independent read-map/read-completion: only write
+  extents protect shrink; overlapping shrink returns EBUSY until write completion.
+
+All three regressions failed against the old code (five issues, including
+second-read-map errno 16) and passed after the write-only lease correction.
+The SDK 27 completion-status optionality warning remains unchanged.
+No app/release build, registration, install or mounted retry is part of this
+correction; the live RO acceptance gate remains open.
+
+Final headless matrix: **17 probe/policy + 33 glue + 30 bridge tests** passed
+in each of plain (449.700 s bridge), ASan (500.271 s bridge) and explicitly
+runtime-linked UBSan (460.247 s bridge), with no sanitizer diagnostics.
+All six Python suites passed **32 tests** (4 + 16 + 4 + 1 + 5 + 2).
+Commands used:
+
+```sh
+swift test --package-path Packages/NTFSCore
+swift test --package-path Packages/NTFSCore --sanitize=address
+swift test --package-path Packages/NTFSCore --sanitize=undefined \
+  -Xlinker /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib
+python3 scripts/test-bench.py
+python3 scripts/test-p0.py
+python3 scripts/test-p0-install.py
+python3 scripts/test-p0-phases.py
+python3 scripts/test-p0-readonly.py
+python3 scripts/test-seqio.py
+```
