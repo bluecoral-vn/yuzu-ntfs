@@ -74,24 +74,31 @@ def supervise(revoke, description, timeout, authorize=None):
     finally:
         if not worker:
             signal.pthread_sigmask(signal.SIG_BLOCK, signals)
-            for fd in (read_fd, write_fd):
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-            revoked = False
             try:
-                revoke()
-                revoked = True
+                for fd in (read_fd, write_fd):
+                    if fd is not None:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                revoked = False
+                try:
+                    revoke()
+                    revoked = True
+                finally:
+                    if pid is not None and status is None:
+                        authorization = 'authorization revoked FIRST' if revoked else 'authorization revocation attempted FIRST'
+                        print(f'benchmark {reason}; {authorization}; worker PID/PGID={pid}; attachment may survive: {description}. No forced cleanup or blocking reap attempted.', file=sys.stderr, flush=True)
+                        try:
+                            os.killpg(pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        except PermissionError as error:
+                            print(f'SIGTERM could not be delivered to owned worker group {pid}: {error}; worker may survive. No blocking reap or force cleanup attempted.', file=sys.stderr, flush=True)
             finally:
-                if pid is not None and status is None:
-                    authorization = 'authorization revoked FIRST' if revoked else 'authorization revocation attempted FIRST'
-                    print(f'benchmark {reason}; {authorization}; worker PID/PGID={pid}; attachment may survive: {description}. No forced cleanup or blocking reap attempted.', file=sys.stderr, flush=True)
-                    try:
-                        os.killpg(pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    except PermissionError as error:
-                        print(f'SIGTERM could not be delivered to owned worker group {pid}: {error}; worker may survive. No blocking reap or force cleanup attempted.', file=sys.stderr, flush=True)
+                # phase() catches SystemExit to start the next supervised phase.
+                # Do not leak blocked signals/our handler into it or its logger.
+                for signum, handler in previous.items():
+                    signal.signal(signum, handler)
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
     raise SystemExit(code if code >= 0 else 128 - code)

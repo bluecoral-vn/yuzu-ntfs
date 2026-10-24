@@ -228,17 +228,89 @@ def bundle_metadata(app):
     return commit, value.hexdigest()
 
 
+QC_TEMP = Path('/tmp')
+DERIVED_DATA = Path.home() / 'Library/Developer/Xcode/DerivedData'
+
+
+def known_bundles(staged, records):
+    """Inventory and validate the complete isolation set before any mutation."""
+    candidates = {staged}
+    for record in records:
+        extension = Path(record['path'])
+        if extension == APPEX:
+            continue
+        require(extension.suffix == '.appex' and extension.parent.name == 'Extensions' and extension.parent.parent.name == 'Contents' and extension.parent.parent.parent.suffix == '.app', 'Unsafe parent-app derivation')
+        candidates.add(extension.parent.parent.parent)
+    # Inventory-only: these historical external copies are NEVER authorized
+    # for deletion. Even unregistered copies must be listed/refused if present.
+    for app in DERIVED_DATA.glob('YuzuNTFS-*/Build/Products/*/*.app'):
+        info = app / 'Contents/Info.plist'
+        if info.is_file() and plistlib.loads(info.read_bytes()).get('CFBundleIdentifier') == 'com.bluecoral.vn.yuzuntfs':
+            candidates.add(app)
+    roots = [ROOT] + [path for path in QC_TEMP.glob('yuzu-qc*') if path.is_dir()]
+    for root in roots:
+        for app in root.rglob('*.app'):
+            if app == APP:
+                continue
+            info = app / 'Contents/Info.plist'
+            if info.is_file() and plistlib.loads(info.read_bytes()).get('CFBundleIdentifier') == 'com.bluecoral.vn.yuzuntfs':
+                candidates.add(app)
+    refused = []
+    for app in candidates:
+        canonical = app.resolve()
+        relative = canonical.relative_to(QC_TEMP.resolve()).parts if canonical.is_relative_to(QC_TEMP.resolve()) else ()
+        temporary = bool(relative) and relative[0].startswith('yuzu-qc')
+        scoped = canonical.is_relative_to(ROOT.resolve()) or temporary
+        if not scoped or app.is_symlink() or canonical == APP.resolve() or app.suffix != '.app':
+            refused.append(str(app))
+        elif app.exists():
+            info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+            if info.get('CFBundleIdentifier') != 'com.bluecoral.vn.yuzuntfs':
+                refused.append(str(app))
+    require(not refused, 'Refusing out-of-scope, aliased or unverified bundle(s); operator must isolate them: ' + ', '.join(sorted(refused)))
+    return sorted(candidates)
+
+
+def isolate_bundle(runner, app):
+    """Archive and verify before deleting only an already-validated bundle."""
+    if not runner.dry and not app.exists():
+        print('Already absent (stale registration):', app)
+        return
+    archive_root = ROOT / 'build/archive'
+    if runner.dry:
+        runner.run('mkdir', '-p', archive_root)
+        archive = archive_root / '<unique-Yuzu-bundle>.zip'
+    else:
+        require(archive_root.resolve().is_relative_to(ROOT.resolve()), 'Archive directory escapes worktree')
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archive = archive_root / (app.stem + '-' + str(time.time_ns()) + '.zip')
+        require(not archive.exists(), 'Archive collision; refusing overwrite')
+    runner.run('ditto', '-c', '-k', '--keepParent', app, archive, timeout=120)
+    runner.run('/usr/bin/unzip', '-t', archive, timeout=120)
+    if not runner.dry:
+        require(archive.is_file(), 'Verified archive is absent')
+        # Recheck scope/identity after archival, before the destructive step.
+        require(known_bundles(app, []) and not app.is_symlink(), 'Bundle isolation scope changed')
+    runner.run('/bin/rm', '-rf', '--', app, timeout=120)
+    if not runner.dry:
+        require(not app.exists() and not app.is_symlink(), 'Unpacked duplicate is still discoverable')
+    print('ISOLATED bundle:', app, 'archive:', archive)
+
+
 def install(runner, staged, expected_commit):
     preflight(runner)
     inventory = runner.run('pluginkit', '-mADvvv', '-i', MODULE)
     if runner.dry:
         records = [{'path': '<each-non-/Applications-registration>/YuzuNTFSModule.appex'}]
         print('CHECK staged app + module YuzuGitCommit == expected commit; KOIO=true')
+        bundles = [Path('<each-scoped-noninstalled-Yuzu.app-including-staged-after-copy>')]
+        print('CHECK all known bundles (worktree and /tmp/yuzu-qc*) are scoped Yuzu apps; refuse/list every outside path BEFORE changes')
     else:
         commit, digest = bundle_metadata(staged)
         require(commit == expected_commit, f'Staged commit {commit} != expected {expected_commit}')
         print('STAGED YuzuGitCommit=', commit, 'module SHA256=', digest)
         records = registrations(inventory)
+        bundles = known_bundles(staged, records)
     for record in records:
         extension = Path(record['path'])
         if extension == APPEX:
@@ -255,6 +327,12 @@ def install(runner, staged, expected_commit):
     print('ASSERT installed executable SHA256 and both YuzuGitCommit values equal staged/expected')
     runner.run('codesign', '--verify', '--deep', '--strict', APP)
     runner.run('spctl', '--assess', '--type', 'execute', '--verbose=2', APP, timeout=60)
+    for app in bundles:
+        isolate_bundle(runner, app)
+    isolated = runner.run('pluginkit', '-mADvvv', '-i', MODULE)
+    if not runner.dry:
+        require(all(record['path'] == str(APPEX) for record in registrations(isolated)), 'Noninstalled registration survived isolation; stop before final registration/refresh')
+    print('ASSERT no unpacked known duplicate/staged bundle remains; no noninstalled registration')
     runner.run(LSREGISTER, '-f', APP)
     runner.run('pluginkit', '-a', APPEX)
     runner.run('pluginkit', '-e', 'use', '-i', MODULE)

@@ -183,15 +183,22 @@ state-U processes; PID 65911 must be absent even if reused. It refuses historica
 mounts (including CoreDevice/DeviceFS), and a nonempty or malformed RW allowlist.
 Every external command has a deadline and failure stops the procedure.
 
-Install inventories `pluginkit -mADvvv`, unregisters every noninstalled module and
-its parent app with scoped `pluginkit -r`/`lsregister -u` (never a database reset),
-then copies to `/Applications`. This includes historical worktree, DerivedData and
-`/tmp/yuzu-qc-dd/Build/Products/{Debug,Release-Direct}` copies whenever registered.
-It asserts staged/installed executable SHA-256, both git identities and KOIO,
-verifies deep/strict signature and Gatekeeper acceptance, performs final registration,
-requires exactly one `/Applications` entry, records its UUID, then refreshes only
-the current user's `fskit_agent`. FSClientProbe must show enabled=true at the exact
-installed URL; absence/disabled/wrong URL is a failing exit, not readiness.
+Install inventories `pluginkit -mADvvv` plus all Yuzu-identifier `.app` bundles in
+the worktree and `/tmp/yuzu-qc*`, including currently unregistered duplicates.
+It validates every candidate's bundle identity and isolation scope **before**
+changing registration state; any outside-worktree/outside-QC-temp path, alias
+or unverifiable parent is listed for the operator and makes installation stop.
+Historical external DerivedData copies must be isolated by the operator if reported;
+the script never deletes them without authorization. There is no LS database reset.
+After scoped unregistering and copying to `/Applications`, the installer verifies
+the executable SHA-256, both git identities, KOIO, signature and Gatekeeper. Only
+then does it archive **every known noninstalled Yuzu bundle, including staging**,
+verify each zip with `unzip -t`, and remove its unpacked bundle. Archives live in
+`build/archive/`; do not unpack them during testing. A failed archive check preserves
+the unpacked source and prevents final registration/refresh. It repeats inventory,
+registers the installed app last, requires exactly one `/Applications` entry,
+records its UUID, and only then refreshes the current user's `fskit_agent`.
+FSClientProbe must show enabled=true at the exact installed URL.
 
 Enable/disable back up `enabledModules.plist`, merge/remove only Yuzu's string and
 preserve all unrelated entries. Both refuse active FSKit-capable mounts before any
@@ -225,6 +232,8 @@ deadlines and parent-owned fixture authorization. On failure/timeout it revokes
 before signaling its owned process group, reports surviving PID/possible image
 attachments, never blocks reaping a state-U child and never force-unmounts/kills
 filesystem daemons. Stop and investigate surviving attachments before another run.
+The reusable supervisor restores the caller's signal mask and handlers before
+returning its exit status, so later phases and their loggers remain interruptible.
 
 The RO phase checks the resident SHA-256, observed buffered-read callback and
 unchanged image hash. The RW phase verifies resident append/remount, the formerly
@@ -241,6 +250,8 @@ Its presence latches effective RO on the next operation. Writes/map/completion
 then reply EROFS; removing the file does not unlatch an existing volume. The guest
 test removes it and remounts between FD/mmap cases. A stale hook makes a subsequent
 acceptance refuse until explicitly removed. Remove this hook in P1 (Q-R2).
+Read completions use the append-only non-mutating physical-extent query for cache
+purges: they never call the read mapper, promote, pad VDL or write after the latch.
 Eligibility is fixed at item publication (Q-R1), not flipped on RO. Previously
 retained kernel mappings are **not physically revoked**; the guest gate deliberately
 fails if cached FD/mmap writeback succeeds. T7-R5's unreported cached-write ordering
