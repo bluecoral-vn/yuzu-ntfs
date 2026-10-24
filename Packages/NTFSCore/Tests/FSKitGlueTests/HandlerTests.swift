@@ -43,6 +43,7 @@ private final class HandlerCore {
         api.nb_getattr = { core, ref, parent, out in
             let s = HandlerCore.state(core); if s.failure != 0 { return s.failure }
             out!.pointee = nb_attr(); out!.pointee.ref = ref; out!.pointee.parent_ref = parent
+            out!.pointee.size = ref == 5 ? 0 : 8192
             out!.pointee.type = ref == 5 ? NB_DIR : NB_FILE; out!.pointee.flags = s.flags; return 0
         }
         api.nb_lookup = { core, _, _, _, out in let s = HandlerCore.state(core); out!.pointee.ref = 42; out!.pointee.parent_ref = 5; return s.failure }
@@ -118,4 +119,130 @@ private final class ReplyOnce {
             #expect(core.closes == 1)
         }
     }
+}
+
+@Test func invalidIORangesReplyExactlyOnceWithoutTrapping() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    let item = YuzuNTFSItem(ref: 42, parent: 5)
+    let packer = class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker
+    let buffer = class_createInstance(FSMutableFileDataBuffer.self, 0) as! FSMutableFileDataBuffer
+    for (offset, length) in [(Int64(-1), 1), (0, -1), (Int64.max, 1)] {
+        let start = Date()
+        let mapping = ReplyOnce()
+        volume.blockmapFile(item, offset: offset, length: length, flags: [], operationID: .unspecified, packer: packer, replyHandler: mapping.accept)
+        mapping.assertOnce(); #expect((mapping.error as NSError?)?.code == Int(EINVAL))
+        let completion = ReplyOnce()
+        volume.completeIO(for: item, offset: offset, length: length, status: nil, flags: [], operationID: .unspecified, replyHandler: completion.accept)
+        completion.assertOnce(); #expect((completion.error as NSError?)?.code == Int(EINVAL))
+        let read = ReplyOnce()
+        volume.read(from: item, at: offset, length: length, into: buffer) { _, error in read.accept(error) }
+        read.assertOnce(); #expect((read.error as NSError?)?.code == Int(EINVAL))
+        #expect(Date().timeIntervalSince(start) < 0.5)
+    }
+    let write = ReplyOnce()
+    volume.write(contents: Data([1]), to: item, at: Int64.max) { _, error in write.accept(error) }
+    write.assertOnce(); #expect((write.error as NSError?)?.code == Int(EINVAL))
+}
+
+private final class BusyItemProbe: @unchecked Sendable {
+    let item = YuzuNTFSItem(ref: 42, parent: 5)
+    let done = DispatchSemaphore(value: 0)
+    var result: Int?
+}
+@Test func retainedMappingDoesNotBlockUnrelatedHandlerForever() {
+    let probe = BusyItemProbe()
+    probe.item.operation = FSOperationID(rawValue: 123)
+    DispatchQueue.global().async {
+        do { try probe.item.normal {}; probe.result = 0 }
+        catch { probe.result = (error as NSError).code }
+        probe.done.signal()
+    }
+    let finished = probe.done.wait(timeout: .now() + 0.2)
+    // Release the old implementation's wait even when the regression is RED.
+    probe.item.io.lock(); probe.item.finishMapping(FSOperationID(rawValue: 123)); probe.item.io.unlock()
+    #expect(finished == .success)
+    if finished != .success { _ = probe.done.wait(timeout: .now() + 0.5) }
+    #expect(probe.result == Int(EBUSY))
+}
+
+@Test func unknownItemsReceiveOneErrorReply() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    let unknown = FSItem()
+    let attributes = FSItem.SetAttributesRequest()
+    let name = FSFileName(string: "name")
+    func expectError(_ invoke: (ReplyOnce) -> Void) {
+        let reply = ReplyOnce(), start = Date()
+        invoke(reply); reply.assertOnce()
+        #expect(reply.error != nil)
+        #expect(Date().timeIntervalSince(start) < 0.5)
+    }
+    expectError { volume.openItem(unknown, modes: [.read], replyHandler: $0.accept) }
+    expectError { volume.closeItem(unknown, modes: [.read], replyHandler: $0.accept) }
+    expectError { r in volume.getAttributes(FSItem.GetAttributesRequest(), of: unknown) { _, e in r.accept(e) } }
+    expectError { r in volume.setAttributes(attributes, on: unknown) { _, e in r.accept(e) } }
+    expectError { r in volume.lookupItem(named: name, inDirectory: unknown) { _, _, e in r.accept(e) } }
+    expectError { r in volume.createItem(named: name, type: .file, inDirectory: unknown, attributes: attributes) { _, _, e in r.accept(e) } }
+    expectError { volume.removeItem(unknown, named: name, fromDirectory: unknown, replyHandler: $0.accept) }
+    expectError { r in volume.renameItem(unknown, inDirectory: unknown, named: name, to: name, inDirectory: unknown, overItem: nil) { _, e in r.accept(e) } }
+    expectError { volume.reclaimItem(unknown, replyHandler: $0.accept) }
+    expectError { r in volume.write(contents: Data(), to: unknown, at: 0) { _, e in r.accept(e) } }
+}
+
+@Test func realVolumeHandlersReplyOnceForBridgeSuccessAndErrors() throws {
+    for code: Int32 in [0, EIO, EROFS, ENOENT] {
+        let core = HandlerCore(), volume = try core.volume()
+        volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+        core.failure = code
+        let item = YuzuNTFSItem(ref: 42, parent: 5), directory = YuzuNTFSItem(ref: 5, parent: 5)
+        let name = FSFileName(string: "name"), request = FSItem.SetAttributesRequest()
+        let packer = class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker
+        func check(_ expectedError: Bool, _ invoke: (ReplyOnce) -> Void) {
+            let reply = ReplyOnce(), start = Date()
+            invoke(reply); reply.assertOnce()
+            #expect((reply.error != nil) == expectedError)
+            #expect(Date().timeIntervalSince(start) < 0.5)
+        }
+        check(code != 0) { volume.synchronize(flags: .wait, replyHandler: $0.accept) }
+        check(code != 0) { r in volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in r.accept(error) } }
+        check(code != 0) { r in volume.setAttributes(request, on: item) { _, error in r.accept(error) } }
+        check(code != 0) { r in volume.lookupItem(named: name, inDirectory: directory) { _, _, error in r.accept(error) } }
+        check(code != 0) { r in volume.lookupItem(name: name, in: directory, packer: packer) { _, _, error in r.accept(error) } }
+        check(code != 0) { r in volume.createItem(named: name, type: .file, inDirectory: directory, attributes: request) { _, _, error in r.accept(error) } }
+        check(code != 0) { r in volume.createFile(name: name, in: directory, attributes: request, packer: packer) { _, _, error in r.accept(error) } }
+        check(code != 0) { volume.removeItem(item, named: name, fromDirectory: directory, replyHandler: $0.accept) }
+        check(code != 0) { r in volume.renameItem(item, inDirectory: directory, named: name, to: name, inDirectory: directory, overItem: nil) { _, error in r.accept(error) } }
+        check(code != 0) { r in volume.write(contents: Data([1]), to: item, at: 0) { _, error in r.accept(error) } }
+        check(code != 0) { volume.openItem(item, modes: [.write], replyHandler: $0.accept) }
+        check(false) { volume.closeItem(item, modes: [.write], replyHandler: $0.accept) }
+        check(code != 0) { volume.completeIO(for: item, offset: 0, length: 0, status: nil, flags: [.write], operationID: .unspecified, replyHandler: $0.accept) }
+        check(false) { volume.blockmapFile(item, offset: 0, length: 0, flags: [], operationID: .unspecified, packer: packer, replyHandler: $0.accept) }
+        check(true) { r in volume.createSymbolicLink(named: name, inDirectory: directory, attributes: request, linkContents: name) { _, _, error in r.accept(error) } }
+        check(true) { r in volume.createLink(to: item, named: name, inDirectory: directory) { _, error in r.accept(error) } }
+        check(true) { r in volume.readSymbolicLink(item) { _, error in r.accept(error) } }
+        check(false) { volume.reclaimItem(item, replyHandler: $0.accept) }
+        check(false) { volume.mount(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions, replyHandler: $0.accept) }
+        let unmount = ReplyOnce()
+        volume.unmount { unmount.accept(nil) }; unmount.assertOnce()
+    }
+}
+
+@Test func namespaceRemovalDoesNotWaitForExplicitMapping() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, _ in }
+    let item = YuzuNTFSItem(ref: 42, parent: 5), parent = YuzuNTFSItem(ref: 5, parent: 5)
+    item.operation = FSOperationID(rawValue: 123)
+    item.extents = [nb_extent(logical: 4096, physical: 4096, length: 512, kind: UInt32(NB_EXT_DATA))]
+    let name = FSFileName(string: "name"), remove = ReplyOnce(), rename = ReplyOnce()
+    volume.removeItem(item, named: name, fromDirectory: parent, replyHandler: remove.accept)
+    volume.renameItem(item, inDirectory: parent, named: name, to: name, inDirectory: parent, overItem: item) { _, error in rename.accept(error) }
+    remove.assertOnce(); rename.assertOnce()
+    #expect(remove.error == nil); #expect(rename.error == nil)
+    let request = FSItem.SetAttributesRequest(); request.size = 0
+    let busy = ReplyOnce()
+    volume.setAttributes(request, on: item) { _, error in busy.accept(error) }
+    busy.assertOnce(); #expect((busy.error as NSError?)?.code == Int(EBUSY))
+    item.io.lock(); item.finishMapping(FSOperationID(rawValue: 123)); item.io.unlock()
+    let completed = ReplyOnce()
+    volume.setAttributes(request, on: item) { _, error in completed.accept(error) }
+    completed.assertOnce(); #expect(completed.error == nil)
 }

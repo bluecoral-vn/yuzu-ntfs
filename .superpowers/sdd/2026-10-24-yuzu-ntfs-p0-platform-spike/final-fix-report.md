@@ -201,4 +201,45 @@ Respected. Only headless image-file/package tests, harmless Python subprocess te
 
 G1 remains incomplete, and F3 plus the actual-mount half of F6 lack requested RED-before-fix evidence. E7's fault RED did not replay the old size-publication failure because F-R2 had already removed it. E8 is unreachable/moot per F-R1, not tested as an authorized sparse-write path. Safe sparse writes, T7-R5 reverse/unreported ordering, symlink-target/ADS mutations and owner mounted/macOS26/hardware/chkdsk gates remain outside implemented P0 behavior. No claim of resolved kernel wedge or production safety is made.
 
-Additional static G1 risk identified but not exercised/fixed: blockmapFile and completeIO validate offset but directly convert Int length to UInt64; negative lengths can trap before a reply. read likewise lacks a negative-length check before passing its count into the C bridge. This is not covered by the existing green suite and must be addressed before claiming the reply-once invariant.
+The static negative-length risk described during the first handoff is fixed by the G1 continuation below. G1 is still incomplete for the separately listed uncovered handlers/branches.
+
+## G1 continuation after Main's instruction
+
+Production changes: `YuzuNTFSVolume.swift` validates nonnegative offset/length and signed endpoint bounds before casts or item locks; read/write/blockmap/completion invalid ranges reply EINVAL once. Timestamp inputs use overflow-reporting arithmetic and reject invalid nanoseconds. Caller-supplied FSItem conversion now throws EINVAL instead of force-casting; open/close validate even read-only/no-op modes. `YuzuNTFSItem.normal` and contending explicit blockmaps return EBUSY instead of waiting for another callback's completion. The retained operation is not released by the rejected request.
+
+RED: `swift test --filter invalidIORangesReplyExactlyOnceWithoutTrapping` (532) terminated with `Fatal error: Negative value is not representable`. GREEN same command (534): one test passed. RED: `swift test --filter retainedMappingDoesNotBlockUnrelatedHandlerForever` (536): deadline timed out and result was 0 instead of EBUSY. The regression explicitly releases the old wait after recording RED so it leaves no wedged test worker. GREEN observed in 538. Unknown-item regression initially found open/close still returned success (538); those handlers now validate their items.
+
+`realVolumeHandlersReplyOnceForBridgeSuccessAndErrors` drives actual handlers under bridge status 0/EIO/EROFS/ENOENT, asserts exactly one closure invocation, and asserts elapsed <0.5 seconds. It exercises synchronize, getattr, setattr, ordinary and KOIO-wrapper lookup/create, remove, rename, buffered write, write-open, close, zero-length blockmap/completion, ENOTSUP symlink/hardlink/readlink, reclaim, mount and unmount. `unknownItemsReceiveOneErrorReply` exercises invalid FSItem open/close/get/set/lookup/create/remove/rename/reclaim/write. Numeric-invalid read/blockmap/completion and write-overflow are separately exercised. These tests passed in the plain phase of the final sequential matrix (16 glue tests total).
+
+Updated coverage table (supersedes corresponding first-wave rows above):
+
+| Handler | Real-handler paths now covered | Still not driven |
+|---|---|---|
+| synchronize/getAttributes/setAttributes | success and bridge EIO/EROFS/ENOENT; unknown item for get/set | timestamp invalid boundaries; size policy variations |
+| lookup/create plus KOIO forwarding overloads | success and bridge EIO/EROFS/ENOENT; unknown directory; initial-attribute failure rollback | name conversion, pin failure in lookup/create, rollback failure |
+| remove/rename/write/open | success and bridge EIO/EROFS/ENOENT; unknown items; invalid write endpoint; effective RO open | every replacement/flag/forced-RO variation |
+| close/reclaim/mount/unmount | ordinary success; unknown close/reclaim; activate/deactivate lifecycle regressions retained | SDK tryReclaim refusal/success distinction; stale already-reclaimed identities |
+| blockmapFile | zero-length success; negative/overflowing range; busy-mapping rejection implemented | actual SDK packer data/zero-fill/stop and purge failures; unknown-item invocation not included |
+| completeIO | zero-length success and bridge errors; negative/overflowing range | nonempty tracked/cached/purge failures and already-reclaimed item |
+| read | negative/overflowing range reply-once | actual SDK mutable buffer success/error; no public buffer initializer was used |
+| createSymbolicLink/createLink/readSymbolicLink | ENOTSUP reply exactly once | no supported success path in P0 |
+| enumerateDirectory | no new handler test | stale verifier, packer stop, actual entries and bridge errors |
+| filesystem probe/load/unload | no new handler test | all three; FSKitGlue target does not yet include filesystem source |
+
+No structural static reply-path guard was added. A generic callback counter cannot prove all paths or prevent a future missing reply. The continuation closes concrete traps/waits and broadens actual-handler tests, but **does not satisfy exhaustive G1 acceptance**. The caller-supplied device-size conversion paths in `YuzuNTFSFileSystem` and every SDK resource-backed packer/buffer path still require review/test harness extension. No claim is made that the coverage gaps are impossible to drive; they remain unfinished.
+
+### Namespace/shrink correction requested by Main
+
+`removeItem` and `renameItem` no longer enter item mapping guards: namespace unlink/replacement is serialized at the bridge and relies on existing inode pins/deferred freeing, so even an explicit in-flight mapping does not cause EBUSY for name removal. `changingSize` rejects only an explicit operation whose recorded extent crosses the requested new EOF; it does not reject retained cached mappings or completed operation IDs. Metadata-only setattr and non-overlapping size changes proceed immediately.
+
+SDK evidence: Xcode macOS 27 SDK `FSVolume.h:665–688` specifies growth zero semantics (`669–671`) and shrink/freeing (`673`), but provides no drain/invalidation guarantee in this setter contract. `FSVolumeExtent.h:139–142` explicitly says the kernel retains unspecified/F_LOG2PHYS mappings and can perform I/O at any time. Therefore no blanket drain assumption is made: only a currently recorded explicit operation overlapping the removed tail returns EBUSY. A completed explicit operation clears the lease; retained cached mappings do not own one. `FSVolume.h:397–407` describes open-unlink emulation; E2's own pins supply the namespace/deferred-free mechanism.
+
+`namespaceRemovalDoesNotWaitForExplicitMapping` checks remove and rename succeed immediately despite an explicit outstanding range, overlapping size-to-zero returns EBUSY, and the same size request succeeds after completion clears the explicit operation. It passed in the plain phase of the final 17-glue-test matrix. The existing real-image `removedAndReplacedItemsRetainAllocationUntilReclaim` continues checking inode/cluster pin lifetime; the new namespace test uses the real volume handlers over the injected bridge, not an additional real-image raw-map removal fixture. This distinction is retained as a coverage limitation.
+
+The earlier 16-test verification command was cancelled after this correction changed production code. A replacement complete sequential plain/ASan/linked-UBSan/Debug-build matrix was started against the corrected final sources.
+
+### Latest continuation verification — final production sources
+
+The complete sequential command is the four commands already specified above joined by `&&`: plain suite, ASan suite, explicitly linked UBSan suite, then `xcodegen generate && xcodebuild -scheme YuzuNTFS -configuration Debug build`. It exited 0 (artifact 543); each suite reported 17 probe/policy + 17 glue + 25 bridge tests. Bridge durations: initial plain 379.273 s, ASan 462.255 s, UBSan 446.466 s. Debug emitted `** BUILD SUCCEEDED **`; no ASan/UBSan runtime error was reported. The last ordinary-growth-versus-shrink discrimination correction landed before the ASan and UBSan builds; therefore a final plain run was also executed afterwards to cover that exact final source: `swift test --package-path Packages/NTFSCore`, exit 0, artifact 545, 17 + 17 + 25 tests, bridge 424.368 s. No production source changed after these final sanitizer/build phases.
+
+Final status remains **G1 INCOMPLETE** for the explicit uncovered paths in the table, not a complete no-hang guarantee. Namespace removal no longer depends on completion callbacks, and size growth is not rejected merely because a pending write extends farther; EBUSY applies only to an explicit overlapping tail during actual shrink.

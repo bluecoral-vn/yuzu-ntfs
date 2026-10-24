@@ -16,12 +16,19 @@ final class YuzuNTFSItem: FSItem {
     var releasePin: (() -> Void)?
     init(ref: UInt64, parent: UInt64) { self.ref = ref; self.parent = parent; super.init() }
     deinit { releasePin?() }
-    func normal<T>(_ body: () throws -> T) rethrows -> T {
+    func normal<T>(_ body: () throws -> T) throws -> T {
         io.lock(); defer { io.unlock() }
-        while operation != nil { io.wait() }
+        guard operation == nil else { throw POSIXError(.EBUSY) }
         return try body()
     }
-    static func mutating<T>(_ first: YuzuNTFSItem, replacing second: YuzuNTFSItem?, _ body: () throws -> T) rethrows -> T {
+    func changingSize<T>(to size: UInt64?, _ body: () throws -> T) throws -> T {
+        io.lock(); defer { io.unlock() }
+        if let size, operation != nil, extents.contains(where: {
+            $0.length > UInt64.max - $0.logical || $0.logical + $0.length > size
+        }) { throw POSIXError(.EBUSY) }
+        return try body()
+    }
+    static func mutating<T>(_ first: YuzuNTFSItem, replacing second: YuzuNTFSItem?, _ body: () throws -> T) throws -> T {
         guard let second, second !== first else { return try first.normal(body) }
         let low = first.ref < second.ref ? first : second
         let high = first.ref < second.ref ? second : first
