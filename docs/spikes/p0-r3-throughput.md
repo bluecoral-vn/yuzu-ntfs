@@ -800,3 +800,36 @@ Evidence: `build/p0-reinstall-qr3-preflight-20261025.log`,
 `build/p0-reinstall-qr3-20261025.log`, and
 `build/p0-host-ro-qr3-20261025.log`. No app/probe rebuild, subsequent mount attempt
 or push was performed.
+
+### Authorized personality-rule correction and RO PASS
+
+Controller clarified that `mount(8)` is authoritative for the serving driver:
+the exact owned device/mountpoint must show `yuzuntfs` and the requested RO flag.
+`diskutil FilesystemType=ntfs` is an agreeing personality name, not a competing
+driver. Commit `2d52e1b` (`fix(ops): accept ntfs personality for yuzuntfs mounts`)
+accepts that value only after the authoritative checks; msdos/exfat/apfs still
+conflict. All six read-only Python regressions passed, including the recorded
+failed-run fields and wrong-device/type/RO rejection.
+
+The one newly authorized `--allow-host-readonly` invocation exited **0**:
+**RO SUBSET PASS**, with no rebuild/reinstall/refresh or RW/benchmark.
+Evidence directory:
+`build/p0-guest/8f172f33-2e04-4941-962e-671f6381630c`;
+complete transcript: `build/p0-host-ro-personality-20261025.log`.
+
+| Check | Result |
+|---|---|
+| Owned Yuzu RO mounts | PASS for basic, names and bigdir; exact fresh device/mountpoint/type/RO checks |
+| Resident SHA-256 | PASS — `4b2720d37f921134bfbb2deb27137d6f08fc55ced90f88c4971f5f42e06e1fc6` |
+| Nonresident SHA-256 | PASS — `e987c93a0a4837eaf02125d47e7ebf24dbe507cfc47a49c88e1f2f27492a9e8e` |
+| Names SHA-256 | PASS — all four manifest samples, including CJK, emoji and both accent forms |
+| Bigdir SHA-256 | PASS — manifest samples 000000, 000001, 049999, 099999 |
+| Bigdir enumeration | PASS — `ls -1 -A` count exactly 100000 |
+| Images unchanged | PASS — basic `f1f66e80cc137d09aa3f409973a2fe56a9ab756f4e0c103a8286a9e7c02bef5b`; names `4bb6b3ca62aeece6843ae756fdafbac897e224813c67ea1d81395d031eacd10e`; bigdir `4d905c4e6851bf0d15f6f28dfaf57bf2d18b2685551a498a72bfbe5b7e51c0bf` before=after |
+| Callback evidence | PASS — PID 91916 bufferedRead offset 0 length 512, followed by read-only blockmaps at 0, 1048576, 2097152 and 3145728 |
+| Cleanup | PASS — clean unmount/detach for every fixture; empty allowlist, no owned attachments and no state-U processes |
+
+No EBUSY or timeout occurred. DeviceFS remained absent from mount inventories
+and was unaffected. hdiutil's attach/detach deprecation warnings remain benign
+diagnostics. These results close only this host RO subset, not RW, VM,
+writeback/completion or throughput gates. No physical media or push was used.
