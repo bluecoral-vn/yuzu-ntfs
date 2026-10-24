@@ -69,6 +69,23 @@ def phase(name, serial, timeout, action, write=False):
     os._exit(0)
 
 
+def check_mount_identity(actual, mounts, device, mount, readonly):
+    prefix = f'{device} on {mount} ('
+    rows = [line for line in mounts.splitlines() if line.startswith(prefix) and line.endswith(')')]
+    require(len(rows) == 1, 'Missing or duplicated owned mount identity')
+    options = rows[0][len(prefix):-1].split(', ')
+    require(options[0].lower() == 'yuzuntfs', 'Wrong mounted filesystem')
+    require(('read-only' in options) == readonly, 'Unexpected mount read-only flag')
+    for key, expected in (('DeviceNode', device), ('MountPoint', str(mount)),
+                          ('FilesystemType', 'yuzuntfs'), ('ReadOnlyVolume', readonly)):
+        if key in actual:
+            value = actual[key]
+            if key == 'FilesystemType':
+                value = value.lower()
+            require(value == expected, f'Conflicting diskutil mount field: {key}')
+    print('Verified owned mount:', rows[0], flush=True)
+
+
 class Attachment:
     def __init__(self, runner, image, mount, readonly):
         self.runner, self.image, self.mount, self.readonly = runner, image, mount, readonly
@@ -99,8 +116,7 @@ class Attachment:
         self.runner.run(*command, '-t', 'yuzuntfs', self.dev, self.mount)
         self.mounted = True
         actual = plistlib.loads(self.runner.run('diskutil', 'info', '-plist', self.mount).encode())
-        require(actual.get('DeviceNode') == self.dev and actual.get('FilesystemType', '').lower() == 'yuzuntfs' and actual.get('MountPoint') == str(self.mount), 'Wrong mounted backing device/filesystem')
-        require(bool(actual.get('ReadOnlyVolume')) == self.readonly, 'Unexpected mounted read-only state')
+        check_mount_identity(actual, self.runner.run('/sbin/mount'), self.dev, self.mount, self.readonly)
 
     def close(self):
         if self.dev is None:

@@ -565,3 +565,20 @@ Each fixture is a freshly copied, script-attached image; no RW admission,
 benchmark, agent refresh or installed-module changes are part of this gate.
 The recorded warning regression and manifest/sample regressions passed;
 all six Python operator suites passed 31 tests (4 + 16 + 4 + 1 + 4 + 2).
+
+The next authorized attempt reached the mount but stopped before file reads:
+FSKit's `diskutil info -plist` returned the correct `DeviceNode`/`MountPoint`
+but omitted `FilesystemType` and `ReadOnlyVolume`. Cleanup cleanly unmounted and
+detached it. The separately supervised final audit found no owned attachment,
+no state-U process and an empty RW allowlist. The image and pristine fixture
+both hashed `f1f66e80cc137d09aa3f409973a2fe56a9ab756f4e0c103a8286a9e7c02bef5b`.
+Evidence: `build/p0-host-ro-20261025.log`,
+`build/p0-host-ro-final-audit-20261025.log`, and
+`build/p0-guest/5fc6222b-0b00-4711-a944-55d281560a3c`.
+
+The mount guard now requires an exact fresh-device/mountpoint `mount(8)` row,
+filesystem type `yuzuntfs`, and the requested read-only flag. Any diskutil field
+that is present must independently agree; absent fields cannot substitute for
+mount identity. Regression tests cover the observed missing-field shape plus
+wrong device/type, missing mount/RO flag, and contradictory diskutil RO metadata.
+All six Python suites pass 32 tests (5 + 16 + 4 + 1 + 4 + 2).

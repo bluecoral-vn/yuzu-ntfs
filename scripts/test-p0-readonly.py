@@ -12,6 +12,19 @@ from p0_ops import Runner
 
 
 class ReadOnlyAcceptance(unittest.TestCase):
+    def test_fskit_mount_identity_with_missing_diskutil_fields(self):
+        # diskutil fields observed on the failed 2026-10-25 FSKit mount;
+        # mount syntax follows the recorded mount(8) inventory format.
+        actual = {'DeviceNode': '/dev/disk12', 'MountPoint': '/tmp/owned-ro'}
+        line = '/dev/disk12 on /tmp/owned-ro (yuzuntfs, local, read-only, fskit, mounted by rom)\n'
+        guest.check_mount_identity(actual, line, '/dev/disk12', Path('/tmp/owned-ro'), True)
+        for bad in (line.replace('read-only, ', ''), line.replace('yuzuntfs', 'ntfs'),
+                    line.replace('/dev/disk12', '/dev/disk13'), ''):
+            with self.assertRaises(RuntimeError):
+                guest.check_mount_identity(actual, bad, '/dev/disk12', Path('/tmp/owned-ro'), True)
+        with self.assertRaises(RuntimeError):
+            guest.check_mount_identity({**actual, 'ReadOnlyVolume': False}, line, '/dev/disk12', Path('/tmp/owned-ro'), True)
+
     def test_plist_stdout_survives_recorded_hdiutil_stderr(self):
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk12</string></dict></array></dict></plist>\n'
         warning = "hdiutil: WARNING: 'hdiutil attach -nomount ...' is deprecated. Please use 'diskutil image attach --noMount ...' instead.\n"
