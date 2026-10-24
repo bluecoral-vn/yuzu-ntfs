@@ -146,10 +146,13 @@ Build/sign/notarize a fresh committed Release-Direct candidate using the existin
 signing procedure; the old staged `build/release` artifact predates this QC wave.
 Both built Info.plists now embed `YuzuGitCommit`; version/build remain 0.1.0/1 (D1).
 The build asserts the processed extension's `FSSupportsKernelOffloadedIO=true`.
-`REGISTER_APP_WITH_LAUNCH_SERVICES=NO` is set for all configurations. Still inventory
-all historical registrations: earlier builds registered even under `/tmp`, and manual
-discovery can rediscover unpacked duplicate apps. Keep unused candidates as archives,
-not discoverable app bundles; never build during mounted acceptance.
+There is no established working registration opt-out in Xcode 27.1: testing
+`REGISTER_APP_WITH_LAUNCH_SERVICES=NO` still ran RegisterWithLaunchServices, so
+the ineffective setting was removed. Swift Build's macOS app registration producer
+has no suppression-setting guard. Inventory all registrations, including the final
+`/tmp/yuzu-qc-fix-dd/Build/Products/Debug/YuzuNTFS.app` and earlier `/tmp/yuzu-qc-dd`
+builds. Manual discovery can rediscover unpacked duplicate apps. Keep unused
+candidates as archives, not discoverable app bundles; never build during acceptance.
 
 Rebuild the readiness probe without running it:
 
