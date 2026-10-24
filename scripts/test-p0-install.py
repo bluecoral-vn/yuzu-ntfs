@@ -86,7 +86,7 @@ class InstallerIsolation(unittest.TestCase):
             self.assertTrue(all(index < registration for index in removals))
             self.assertGreaterEqual(runner.inventories, 3)
 
-    def test_unregistered_external_derived_data_copy_blocks_before_changes(self):
+    def test_unregistered_own_derived_data_copy_is_archived(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, temporary = root / 'repo', root / 'tmp'
@@ -97,19 +97,20 @@ class InstallerIsolation(unittest.TestCase):
             bundle(staged); bundle(external)
             runner = FakeRunner(installed, staged)
             with patch.object(ops, 'ROOT', repo), patch.object(ops, 'QC_TEMP', temporary), patch.object(ops, 'DERIVED_DATA', root / 'DerivedData'), patch.object(ops, 'APP', installed), patch.object(ops, 'APPEX', installed / 'Contents/Extensions/YuzuNTFSModule.appex'), patch.object(ops, 'preflight'), patch.object(ops, 'set_enabled') as refresh:
-                with self.assertRaises(RuntimeError) as failure:
-                    ops.install(runner, staged, COMMIT)
-                self.assertIn(str(external), str(failure.exception))
-                refresh.assert_not_called()
-            self.assertTrue(external.exists() and staged.exists())
-            self.assertEqual(len(runner.commands), 1)  # recorded inventory only
+                ops.install(runner, staged, COMMIT)
+                refresh.assert_called_once()
+            self.assertFalse(external.exists())
+            self.assertTrue(external.parent.exists(), 'must preserve DerivedData directory')
+            self.assertIn(['pluginkit', '-r', str(external / 'Contents/Extensions/YuzuNTFSModule.appex')], runner.commands)
+            self.assertIn([str(ops.LSREGISTER), '-u', str(external)], runner.commands)
+            self.assertEqual(len(list((repo / 'build/archive').glob('*.zip'))), 2)
 
     def test_outside_scope_bundle_is_listed_and_never_modified(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, temporary = root / 'repo', root / 'tmp'
             temporary.mkdir()
-            staged, outside = repo / 'build/release/Yuzu NTFS.app', root / 'outside/YuzuNTFS.app'
+            staged, outside = repo / 'build/release/Yuzu NTFS.app', root / 'DerivedData/OtherProject-recorded/Build/Products/Debug/YuzuNTFS.app'
             installed = root / 'Applications/Yuzu NTFS.app'
             bundle(staged); bundle(outside)
             runner = FakeRunner(installed, outside)

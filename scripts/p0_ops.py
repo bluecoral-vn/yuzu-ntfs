@@ -269,8 +269,7 @@ def known_bundles(staged, records):
             continue
         require(extension.suffix == '.appex' and extension.parent.name == 'Extensions' and extension.parent.parent.name == 'Contents' and extension.parent.parent.parent.suffix == '.app', 'Unsafe parent-app derivation')
         candidates.add(extension.parent.parent.parent)
-    # Inventory-only: these historical external copies are NEVER authorized
-    # for deletion. Even unregistered copies must be listed/refused if present.
+    # Q-R3 authorizes only our exact DerivedData product layout and app names.
     for app in DERIVED_DATA.glob('YuzuNTFS-*/Build/Products/*/*.app'):
         info = app / 'Contents/Info.plist'
         if info.is_file() and plistlib.loads(info.read_bytes()).get('CFBundleIdentifier') == 'com.bluecoral.vn.yuzuntfs':
@@ -288,7 +287,12 @@ def known_bundles(staged, records):
         canonical = app.resolve()
         relative = canonical.relative_to(QC_TEMP.resolve()).parts if canonical.is_relative_to(QC_TEMP.resolve()) else ()
         temporary = bool(relative) and relative[0].startswith('yuzu-qc')
-        scoped = canonical.is_relative_to(ROOT.resolve()) or temporary
+        derived_parts = app.relative_to(DERIVED_DATA).parts if app.is_relative_to(DERIVED_DATA) else ()
+        derived = (len(derived_parts) == 5 and derived_parts[0].startswith('YuzuNTFS-')
+                   and derived_parts[1:3] == ('Build', 'Products')
+                   and derived_parts[4] in ('YuzuNTFS.app', 'Yuzu NTFS.app')
+                   and canonical == DERIVED_DATA.resolve().joinpath(*derived_parts))
+        scoped = canonical.is_relative_to(ROOT.resolve()) or temporary or derived
         if not scoped or app.is_symlink() or canonical == APP.resolve() or app.suffix != '.app':
             refused.append(str(app))
         elif app.exists():
@@ -339,15 +343,10 @@ def install(runner, staged, expected_commit):
         print('STAGED YuzuGitCommit=', commit, 'module SHA256=', digest)
         records = registrations(inventory)
         bundles = known_bundles(staged, records)
-    for record in records:
-        extension = Path(record['path'])
-        if extension == APPEX:
-            continue
-        if not runner.dry:
-            require(extension.suffix == '.appex' and extension.parent.name == 'Extensions' and extension.parent.parent.name == 'Contents' and extension.parent.parent.parent.suffix == '.app', 'Unsafe parent-app derivation')
-        parent = extension.parent.parent.parent if not runner.dry else '<parent-app-of-each-noninstalled-copy>'
+    for app in bundles:
+        extension = app / 'Contents/Extensions/YuzuNTFSModule.appex'
         runner.run('pluginkit', '-r', extension)
-        runner.run(LSREGISTER, '-u', parent)
+        runner.run(LSREGISTER, '-u', app)
     runner.run('ditto', staged, APP, timeout=120)
     if not runner.dry:
         installed_commit, installed_digest = bundle_metadata(APP)
