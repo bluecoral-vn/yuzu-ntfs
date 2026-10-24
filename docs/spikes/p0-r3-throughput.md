@@ -406,3 +406,42 @@ attempt. Plugin UUID: **not collected (installation not attempted)**.
 The signed/notarized/stapled candidate remains staged in `build/release`;
 installation requires resolution of this preflight blocker under separate
 authorization, not bypassing the guard.
+
+### Q-R4 retry — 2026-10-24
+
+Owner authorized the exact Apple CoreDevice DeviceFS exception, committed as
+`6500c85` (`fix(ops): tolerate Apple CoreDevice DeviceFS during P0 agent refresh`).
+The staged application was **not rebuilt**: its embedded approved app commit,
+notarization ID and module hash above remain the candidate identity.
+The guard exempts only one exact source/type/mountpoint tuple; any second DeviceFS,
+wrong path/source/type or additional FSKit volume is refused.
+
+The recorded-mount regression failed before the implementation. Afterwards:
+
+```sh
+python3 scripts/test-p0.py          # 12 tests: OK
+python3 scripts/test-p0-install.py  # 4 tests: OK
+python3 scripts/test-p0-phases.py   # 1 test: OK
+python3 scripts/test-bench.py       # 4 tests: OK
+python3 scripts/test-seqio.py       # 2 tests: OK
+scripts/p0-preflight.sh            # exit 1; stop before installation
+```
+
+An initial `python3 -m unittest discover -s scripts -p 'test*.py'` found no tests
+(exit 5, because these test filenames contain hyphens); the explicit commands
+above exercised all five Python test files, **23 tests passed**.
+
+The live inventory still contains two non-exempt unknown transports:
+
+```text
+/Applications/Sublime Merge.app on /private/var/folders/vf/l44gfxzd5bj3xhlpjlf9qy5w0000gn/T/AppTranslocation/8C44EA7B-5D66-423C-89D0-B9909247AEF8 (nullfs, local, nodev, nosuid, read-only, nobrowse, mounted by rom)
+/Applications/Sublime Text.app on /private/var/folders/vf/l44gfxzd5bj3xhlpjlf9qy5w0000gn/T/AppTranslocation/6E552FE6-52A9-493A-8C41-88664FF17CA1 (nullfs, local, nodev, nosuid, read-only, nobrowse, mounted by rom)
+P0 STOP: Active/unknown FSKit-capable volume: refuse settings/agent/registration changes
+```
+
+Q-R4 deliberately does not exempt `nullfs`, so the retry stopped without changing
+these apps, mounts, registrations or settings. No live install, plugin UUID,
+post-refresh DeviceFS-return observation or readiness result is available.
+CoreDevice DeviceFS was present at the failed preflight; no refresh occurred.
+No Yuzu volume appears in the recorded mount inventory. The original empty-
+allowlist/final-hash/exactly-one-registration checks remain pending installation.
