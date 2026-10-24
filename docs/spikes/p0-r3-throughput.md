@@ -341,3 +341,63 @@ Benchmark authorization now belongs exclusively to the supervising parent. Signa
 FR-2 explicitly permits the repository's existing ad-hoc Debug build phase, but does not permit mounting, attachment, installation, notarization or host recovery operations in this wave. The transport/reboot prerequisite and unverified mounted-write gate remain unchanged.
 
 Final FR-1 headless verification: 17 probe/policy + 24 glue + 27 bridge tests passed plain, ASan and explicitly linked UBSan; 4 benchmark-control + 2 seqio Python tests passed; the generated Debug app build succeeded (artifact 579). N1–N4/T1–T3 are addressed. No mounted/device-progress or original-kernel-wedge resolution is inferred from these results.
+
+## Post-reboot install — 2026-10-24
+
+**STOPPED at live preflight; no installation or registration/settings changes performed.**
+The authorized candidate was built from `70df3979eb28b13b5d10a365bc6b55cf09019429`
+before any install attempt. All build commands completed before live preflight;
+no images were attached, no mounts requested, and no guest acceptance/benchmark run.
+
+Commands and key outputs (worktree root; Xcode commands use
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`):
+
+```sh
+xcodegen generate
+xcodebuild -scheme YuzuNTFS -configuration Release-Direct -derivedDataPath build/r1 build
+xcrun swiftc -framework FSKit spikes/r1/FSClientProbe.swift -o build/r1/FSClientProbe
+ditto 'build/r1/Build/Products/Release-Direct/Yuzu NTFS.app' 'build/release/Yuzu NTFS.app'
+ditto -c -k --keepParent 'build/release/Yuzu NTFS.app' build/release/YuzuNTFS-notary.zip
+xcrun notarytool submit build/release/YuzuNTFS-notary.zip \
+  --key ~/.appstoreconnect/private_keys/AuthKey_5Y9N24UTB9.p8 \
+  --key-id 5Y9N24UTB9 --issuer e8671c23-6675-4e90-84ff-ce9e70887b9a \
+  --wait --output-format json
+# Accepted; ID f3e8437c-9c24-4121-a864-8e2db782617e
+xcrun stapler staple 'build/release/Yuzu NTFS.app'
+# The staple and validate action worked!
+codesign --verify --deep --strict 'build/release/Yuzu NTFS.app'
+# exit 0
+spctl --assess --type execute --verbose=2 'build/release/Yuzu NTFS.app'
+# accepted; source=Notarized Developer ID
+```
+
+The Developer ID-signed app has team `37PX6W22C5`, hardened runtime, and timestamp
+`24 Oct 2026 at 23:17:55`. Both processed app/module `YuzuGitCommit` values equal
+the full approved commit above; processed
+`EXAppExtensionAttributes:FSSupportsKernelOffloadedIO` is `true`.
+Staged module executable SHA-256:
+`882554b13dff03569f70ebe79434c676d3ac2156c012758ad5d6842cbfd45c22`.
+The build emitted the multiple-matching-destinations warning; a warning-free build
+is not claimed.
+
+All four runbook dry-runs (`p0-preflight`, `p0-install --staged
+'build/release/Yuzu NTFS.app'`, `p0-disable`, `p0-enable`) completed without control
+mutations. The subsequent **live** `scripts/p0-preflight.sh` exited 1:
+
+```text
+kern.boottime: Sat Oct 24 22:33:27 2026
+devices -- file:///Users/rom/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/
+  on /Users/rom/Library/Developer/CoreDevice/DeviceFS
+  (devicefs, local, nodev, nosuid, noowners, noatime, quarantine, nobrowse, fskit, mounted by rom)
+P0 STOP: Active/unknown FSKit-capable volume: refuse settings/agent/registration changes
+```
+
+Per the explicit stop-on-preflight-failure instruction, no live installer,
+disable/enable, DerivedData cleanup, registration pruning, daemon refresh or
+post-install probe was run. Installed-vs-staged hash equality, exactly-one
+registration, final RW allowlist and readiness are **not established** by this
+attempt. Plugin UUID: **not collected (installation not attempted)**.
+`mount` showed the existing CoreDevice FSKit mount above and no Yuzu volumes.
+The signed/notarized/stapled candidate remains staged in `build/release`;
+installation requires resolution of this preflight blocker under separate
+authorization, not bypassing the guard.
