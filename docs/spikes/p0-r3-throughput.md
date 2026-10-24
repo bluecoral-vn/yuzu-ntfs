@@ -449,3 +449,80 @@ post-refresh DeviceFS-return observation or readiness result is available.
 CoreDevice DeviceFS was present at the failed preflight; no refresh occurred.
 No Yuzu volume appears in the recorded mount inventory. The original empty-
 allowlist/final-hash/exactly-one-registration checks remain pending installation.
+
+### Q-R5 live installation — 2026-10-25
+
+Q-R5 corrected the guard's classification of kernel-native transports, committed
+as `184d40b` (`fix(ops): classify kernel-native mounts separately from FSKit`).
+Recorded Sublime AppTranslocation `nullfs` mounts now pass; their `fskit`-flagged
+variants fail. Native-type flag variants and flagless Yuzu/NTFS/DeviceFS/lifs are
+also covered. The new regression failed before implementation; all five explicit
+Python test commands above then passed **24 tests** (13 + 4 + 1 + 4 + 2).
+No app or probe rebuild occurred; the installed app remains the approved
+`70df3979eb28b13b5d10a365bc6b55cf09019429` candidate.
+
+```sh
+scripts/p0-preflight.sh
+# P0 PREFLIGHT PASS
+scripts/p0-install.sh --staged 'build/release/Yuzu NTFS.app' \
+  --expected-commit 70df3979eb28b13b5d10a365bc6b55cf09019429
+# P0 PREFLIGHT PASS
+# Refused external DerivedData/YuzuNTFS-ggixrolbwswkchdvpwinppvvteuz candidate before mutation.
+pluginkit -r "$HOME/Library/Developer/Xcode/DerivedData/YuzuNTFS-ggixrolbwswkchdvpwinppvvteuz/Build/Products/Debug/YuzuNTFS.app/Contents/Extensions/YuzuNTFSModule.appex"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -u "$HOME/Library/Developer/Xcode/DerivedData/YuzuNTFS-ggixrolbwswkchdvpwinppvvteuz/Build/Products/Debug/YuzuNTFS.app"
+/bin/rm -rf -- "$HOME/Library/Developer/Xcode/DerivedData/YuzuNTFS-ggixrolbwswkchdvpwinppvvteuz"
+scripts/p0-install.sh --staged 'build/release/Yuzu NTFS.app' \
+  --expected-commit 70df3979eb28b13b5d10a365bc6b55cf09019429
+```
+
+The only `YuzuNTFS-*` DerivedData directory present was removed under Q-R3.
+The retry copied to `/Applications`, verified installed/staged binary hash and
+both git identities, strict deep signature and Gatekeeper
+`accepted; source=Notarized Developer ID`, then archived/zip-tested/removed seven
+unpacked worktree candidates (including staging). No LaunchServices reset or
+other application's registrations were changed. The stapled staged candidate
+is preserved in `build/archive/Yuzu NTFS-1792864144590595000.zip`.
+
+Final registration: **exactly one**, URL
+`/Applications/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex`,
+UUID **`798BF996-E6FE-4AB2-B806-C6F25DDF293C`**. Installed executable SHA-256:
+**`882554b13dff03569f70ebe79434c676d3ac2156c012758ad5d6842cbfd45c22`**,
+identical to the pre-install staged value. Final `codesign --verify --deep
+--strict` exited 0 and final `spctl --assess --type execute --verbose=2`
+reported `accepted; source=Notarized Developer ID`. Installed processed module
+metadata still has `YuzuGitCommit=70df3979eb28b13b5d10a365bc6b55cf09019429`,
+`FSSupportsKernelOffloadedIO=true`, version/build 0.1.0/1.
+
+Installer backed up settings to
+`~/Library/Group Containers/group.com.apple.fskit.settings/enabledModules.plist.yuzu-1792864145567367000.backup`
+and refreshed only current-user `fskit_agent` PID **2722**. Comparing that backup
+with the current plist proved all unrelated enabledModules entries unchanged;
+Yuzu's identifier is present. **However the readiness gate failed**:
+
+```text
+FSClientProbe --expect-enabled --expect-path /Applications/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex
+com.apple.fskit.exfat enabled=true ...
+com.apple.fskit.msdos enabled=true ...
+com.apple.fskit.ftp enabled=true ...
+com.apple.dt.CoreDevice.Extensions.DeviceFS enabled=true ...
+Yuzu absent, disabled, duplicated or wrong URL
+P0 STOP: Command failed (1): .../build/r1/FSClientProbe --expect-enabled ...
+```
+
+The installer's bounded 30-second readiness retries never listed Yuzu. The
+installer therefore exited **1**: installed and registered is **not ready/enabled
+proof**, despite the plist election and single registration. Pluginkit renders
+the installed version as `((null))` although its processed Info.plist contains
+version 0.1.0/build 1; no cause is inferred. Read-only unified logs from the new
+agent PID 81212 include `could not resolve URL while initializing a bundle record!`;
+the private path is not exposed, so this is not proof of the readiness failure's
+cause.
+
+Final RW allowlist size: **0 bytes**. Final `mount` inventory contains **no Yuzu
+or NTFS volume**. CoreDevice DeviceFS disappeared following the refresh and
+remained absent throughout an additional bounded 30-second `/sbin/mount`
+observation; its module was still enumerated enabled by FSClientProbe.
+No manual remount, image attach, daemon escalation, registration reset,
+guest acceptance, benchmark or build followed installation.
+**Result: installation performed; readiness BLOCKED, not a completed enabled install.**
