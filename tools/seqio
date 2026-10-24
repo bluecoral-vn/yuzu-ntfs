@@ -8,9 +8,15 @@ let args = CommandLine.arguments
 if args.count != 4 { fail("usage: seqio read|write path bytes") }
 guard let count = Int64(args[3]), count > 0, ["read", "write"].contains(args[1]) else { fail("invalid arguments") }
 let writing = args[1] == "write"
-let fd = open(args[2], writing ? O_WRONLY | O_CREAT | O_TRUNC : O_RDONLY, 0o600)
+let fd = open(args[2], writing ? O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK : O_RDONLY, 0o600)
 if fd < 0 { fail(String(cString: strerror(errno))) }
 defer { close(fd) }
+if writing {
+    var info = stat()
+    if fstat(fd, &info) != 0 { fail("fstat: \(String(cString: strerror(errno)))") }
+    guard (info.st_mode & S_IFMT) == S_IFREG else { fail("write requires a regular file") }
+    if ftruncate(fd, 0) != 0 { fail("truncate: \(String(cString: strerror(errno)))") }
+}
 if fcntl(fd, F_NOCACHE, 1) != 0 { fail("F_NOCACHE: \(String(cString: strerror(errno)))") }
 let block = 8 * 1024 * 1024
 let buffer = UnsafeMutableRawPointer.allocate(byteCount: block, alignment: 4096)

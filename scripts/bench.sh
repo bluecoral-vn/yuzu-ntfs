@@ -19,15 +19,22 @@ if fstype not in ('yuzuntfs', 'ntfs', 'exfat'): raise SystemExit('unsupported im
 allow = pathlib.Path.home() / 'Library/Containers/com.bluecoral.vn.yuzuntfs.fsmodule/Data/Library/Application Support/YuzuNTFS/p0-rw-serials.txt'
 with image.open('rb') as f: boot = f.read(512)
 serial = f'{int.from_bytes(boot[72:80], "little"):016X}' if boot[3:11] == b'NTFS    ' else None
+expected_signature = b'EXFAT   ' if fstype == 'exfat' else b'NTFS    '
+if boot[3:11] != expected_signature: raise SystemExit('image/fstype mismatch before authorization')
 existing = allow.read_text().splitlines() if allow.exists() else []
+def revoke():
+    if not serial: return
+    current = allow.read_text().splitlines() if allow.exists() else []
+    remaining = [x for x in current if x.upper() != serial]
+    if remaining != current: allow.write_text(''.join(x + '\n' for x in remaining))
+atexit.register(revoke)
+if __name__ == '__main__':
+    sys.path.insert(0, str(root / 'scripts'))
+    from bench_supervisor import supervise
+    supervise(revoke, str(image), float(os.environ.get('BENCH_TIMEOUT', '1800')))
 if serial:
     allow.parent.mkdir(parents=True, exist_ok=True)
     allow.write_text('\n'.join(dict.fromkeys(existing + [serial])) + '\n')
-    def revoke():
-        current = allow.read_text().splitlines() if allow.exists() else []
-        remaining = [x for x in current if x.upper() != serial]
-        if remaining != current: allow.write_text(''.join(x + '\n' for x in remaining))
-    atexit.register(revoke)
 
 def checked_device():
     images = plistlib.loads(subprocess.check_output(['hdiutil', 'info', '-plist']))['images']
@@ -55,6 +62,9 @@ def mount_image():
         if readonly: command += ['-r']
         subprocess.run(command + ['-t', fstype, dev, str(mount)], check=True)
     mounted = True
+    info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', str(mount)]))
+    if info.get('DeviceNode') != dev or info.get('FilesystemType', '').lower() != fstype or info.get('MountPoint') != str(mount):
+        raise SystemExit('mounted backing device/filesystem mismatch; no benchmark writes permitted')
 def remount():
     global mounted
     if checked_device() != dev: raise SystemExit('image device changed')
