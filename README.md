@@ -8,6 +8,8 @@ The app shows “Yuzu NTFS 0.1 Beta” and Quit in a menu-bar extra. Its embedde
 
 Automatic image attachment has selected Yuzu ahead of Apple's read-only NTFS implementation on macOS 27. The subsequent R3 mounted-write run encountered a kernel-wedged workload; no corrected mounted run has established resolution. Mounted testing is blocked until the host is rebooted and the recorded safety findings are closed. See [R3 throughput and incident report](docs/spikes/p0-r3-throughput.md). [R1 enablement](docs/spikes/p0-r1-enable.md) and [R2 automount findings](docs/spikes/p0-r2-automount.md) remain historical evidence, including their then-intentional loading boundary.
 
+Before reboot, disconnect NTFS media and keep it isolated until the replacement is installed and verified. Follow the [post-reboot operator procedure](docs/spikes/p0-r3-throughput.md#resume-after-owner-reboot-not-yet-executed): `p0-preflight.sh` → `p0-install.sh` → verified `p0-disable.sh`/`p0-enable.sh` rollback gate → `p0-guest-acceptance.sh` inside the lume guest. All offer `--dry-run`. Quitting the app does not disable its independently hosted filesystem extension.
+
 Identifiers: app `com.bluecoral.vn.yuzuntfs`, module `com.bluecoral.vn.yuzuntfs.fsmodule`, FS short name `yuzuntfs`; Apple team `37PX6W22C5`. Version `0.1.0`, build `1`; Swift 6 strict concurrency. `Packages/NTFSCore` contains the probe, C bridge/engine integration, headless image conformance tests, and FSKit glue tests.
 
 ## Build

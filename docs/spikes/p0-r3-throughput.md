@@ -54,7 +54,7 @@ Deployment target: macOS 26.0
 | Raw image file | median | write | 0.342380 | 11963.303 | N/A |
 | Raw image file | median | read | 0.387904 | 10559.323 | N/A |
 
-Command per row: `tools/seqio write|read build/r3/raw.img 4294967296`. The helper opens writes with O_TRUNC; **never point raw writes at a formatted image or a device**. Raw JSON capture is in ignored `build/r3/raw-results.json`.
+Command per row: `tools/seqio write|read build/r3/raw.img 4294967296`. The historical helper used O_TRUNC. The current helper opens without O_TRUNC, uses O_NOFOLLOW/O_NONBLOCK, verifies the opened descriptor is a regular file with fstat, then ftruncate; **never point raw writes at a formatted image or a device**. Raw JSON capture is in ignored `build/r3/raw-results.json`.
 
 `bench.sh` emits a Markdown row per workload/run, five runs of: 4 GiB sequential write, cold 4 GiB read, 10,000 × 4 KiB copies, cold `ls -l` of 100,000 entries, cold `rm -rf` of that tree. Read-only mode runs only sequential reads from a preseeded file. A matching image-path marker guards the benchmark tree against deleting foreign data. Extension CPU is the mean of summed current-user `YuzuNTFSModule` `%cpu` samples at 0.2-second intervals around each command; it is not whole-system CPU, Instruments CPU, or a calibrated process-time delta. Native-driver rows use N/A. No extension CPU number was collected in this blocked run; the idle stack sample is **not** a CPU measurement. Script syntax and fail-closed invalid-driver handling were exercised; the full harness still requires a successful mounted run.
 
@@ -132,61 +132,119 @@ An exploratory truncate-to-4096-then-zero approach failed because TT re-resident
 
 ## Resume after owner reboot (not yet executed)
 
-First confirm the owner rebooted and the old cp U-state/image attachments are gone. Do not attempt daemon kills or another mount in the wedged session. Work only in this worktree, never with physical disks.
+### 1. Isolate media BEFORE reboot
 
-### 1. Rebuild final source, sign/notarize/install, re-enable
+Disconnect all NTFS disks before reboot and keep them disconnected until installation,
+duplicate pruning and readiness verification are complete. The old `/Applications` module
+can claim media immediately after boot; an empty RW allowlist does not disable probing.
+**Quitting the menu-bar app is not a kill switch.** Do not run any live steps below on
+the currently wedged host. No daemon/device teardown is a substitute for recovery.
+
+### 2. Finish candidate builds before registration
+
+Build/sign/notarize a fresh committed Release-Direct candidate using the existing R1
+signing procedure; the old staged `build/release` artifact predates this QC wave.
+Both built Info.plists now embed `YuzuGitCommit`; version/build remain 0.1.0/1 (D1).
+The build asserts the processed extension's `FSSupportsKernelOffloadedIO=true`.
+`REGISTER_APP_WITH_LAUNCH_SERVICES=NO` is set for all configurations. Still inventory
+all historical registrations: earlier builds registered even under `/tmp`, and manual
+discovery can rediscover unpacked duplicate apps. Keep unused candidates as archives,
+not discoverable app bundles; never build during mounted acceptance.
+
+Rebuild the readiness probe without running it:
 
 ```sh
-cd /Users/rom/Projects/yuzu-ntfs-p0
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-swift test --package-path Packages/NTFSCore
-scripts/setup-signing.sh
-xcodegen generate
-xcodebuild -scheme YuzuNTFS -configuration Release-Direct -derivedDataPath build/r3 build
+mkdir -p build/r1
+xcrun swiftc -framework FSKit spikes/r1/FSClientProbe.swift -o build/r1/FSClientProbe
 ```
 
-Zip the built app to a **new** zip filename, submit, staple, install with ditto, and unregister only known local build copies as in `p0-r1-enable.md`. The `yuzu-notary` keychain profile is absent on this Mac; controller approved the existing ASC key directly, without modifying keychain profiles:
+### 3. Preflight, install, exercise rollback, enable (media still disconnected)
+
+From the worktree root, first inspect each `--dry-run` transcript. Dry-run executes
+no control command and changes no authorization/settings/registration state.
 
 ```sh
-ditto -c -k --keepParent 'build/r3/Build/Products/Release-Direct/Yuzu NTFS.app' build/r3/YuzuNTFS-resume.zip
-xcrun notarytool submit build/r3/YuzuNTFS-resume.zip \
-  --key /Users/rom/.appstoreconnect/private_keys/AuthKey_5Y9N24UTB9.p8 \
-  --key-id 5Y9N24UTB9 --issuer e8671c23-6675-4e90-84ff-ce9e70887b9a --wait
-xcrun stapler staple 'build/r3/Build/Products/Release-Direct/Yuzu NTFS.app'
-ditto 'build/r3/Build/Products/Release-Direct/Yuzu NTFS.app' '/Applications/Yuzu NTFS.app'
-pluginkit -r "$PWD/build/r3/Build/Products/Release-Direct/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex"
-LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-"$LSREGISTER" -u "$PWD/build/r3/Build/Products/Release-Direct/Yuzu NTFS.app"
-"$LSREGISTER" -f '/Applications/Yuzu NTFS.app'
-pluginkit -a '/Applications/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex'
-pluginkit -e use -i com.bluecoral.vn.yuzuntfs.fsmodule
-pluginkit -mADvvv -i com.bluecoral.vn.yuzuntfs.fsmodule
-python3 spikes/r1/tt-self-enable.py
-build/r1/FSClientProbe
+scripts/p0-preflight.sh --dry-run
+scripts/p0-install.sh --dry-run --staged 'build/release/Yuzu NTFS.app'
+scripts/p0-disable.sh --dry-run
+scripts/p0-enable.sh --dry-run
+scripts/p0-preflight.sh
+scripts/p0-install.sh --staged 'build/release/Yuzu NTFS.app' --expected-commit FULL_APPROVED_40_HEX_COMMIT
+scripts/p0-disable.sh
+scripts/p0-enable.sh
 ```
 
-Record the new UUID and **each** agent restart. The helper backs up enabledModules.plist, preserves all existing entries byte-for-byte when ours is already present, and restarts only the current user's agent. Never reload while any Yuzu/user volume is served. Wait for enabled=true and resolve stale probe endpoints only under the same scoped controller authorization; a restart alone is not readiness proof. Verify installed codesign/Gatekeeper as in R1.
+Preflight requires a boot newer than the recorded wedged-session timestamp OR no
+state-U processes; PID 65911 must be absent even if reused. It refuses historical
+`build/r3/{exfat,mount-test,mount-test2}.img` attachments, active/unknown FSKit-capable
+mounts (including CoreDevice/DeviceFS), and a nonempty or malformed RW allowlist.
+Every external command has a deadline and failure stops the procedure.
 
-### 2. Fixture correctness, before throughput
+Install inventories `pluginkit -mADvvv`, unregisters every noninstalled module and
+its parent app with scoped `pluginkit -r`/`lsregister -u` (never a database reset),
+then copies to `/Applications`. This includes historical worktree, DerivedData and
+`/tmp/yuzu-qc-dd/Build/Products/{Debug,Release-Direct}` copies whenever registered.
+It asserts staged/installed executable SHA-256, both git identities and KOIO,
+verifies deep/strict signature and Gatekeeper acceptance, performs final registration,
+requires exactly one `/Applications` entry, records its UUID, then refreshes only
+the current user's `fskit_agent`. FSClientProbe must show enabled=true at the exact
+installed URL; absence/disabled/wrong URL is a failing exit, not readiness.
 
-Use a new copy of `fixtures/basic-512.img` and a new empty mountpoint below `build/r3/`. In a test script with `try/finally`:
+Enable/disable back up `enabledModules.plist`, merge/remove only Yuzu's string and
+preserve all unrelated entries. Both refuse active FSKit-capable mounts before any
+settings change or refresh. Disable requires FSClientProbe to show Yuzu absent or
+disabled. It is a **no-active-volume rollback/kill switch**, not live write revocation.
+If disabling is refused because a volume is active, revoke its allowlist admission,
+stop the workload under its supervisor and arrange a clean unmount/recovery; do not
+force-kill filesystem daemons. A backup path and inverse script are printed.
+`pluginkit -e ignore` alone and deleting the allowlist alone are NOT disablement.
+After verified disablement, any optional Apple-driver rollback probe must use a
+freshly derived disposable-image device and assert `FilesystemType=ntfs` plus
+`ReadOnlyVolume=true`; no native-driver rollback result is claimed here.
 
-1. Parse bytes 72–79 little-endian after verifying NTFS OEM signature; write its 16-digit hex serial to the sandbox allowlist while preserving unrelated lines. Always remove that serial in finally, including timeout/attach failures.
-2. `hdiutil attach -nomount -plist <new-image>`; obtain the device **from that result**, then verify `hdiutil info -plist` maps it to this exact image under this worktree before **every** mount/write command. No manually typed or reused disk identifiers.
-3. Capture image SHA-256. Explicit `/sbin/mount -F -t yuzuntfs <derived-device> <new-mountpoint>`; `ls -l` and `stat` resident.txt only; unmount, hash again, require equality. Any automatic system write must be investigated rather than waved through as promotion.
-4. Remount; read resident.txt and nonresident.bin and compare their size/SHA-256 against the fixture manifest (and ntfscat bytes). Append known bytes to resident.txt, fsync, unmount/remount, and verify original bytes plus append exactly. This proves existing-resident write routing as well as read routing. Check cp/ls/rm and a Finder copy on this disposable image.
-5. Generate exactly 1,000,003 deterministic nonzero source bytes. Copy through the mounted volume with Terminal `cp`; fsync destination, unmount/remount, then run:
+### 4. Guest acceptance, before throughput
 
-   ```sh
-   stat -f%z "$MOUNT/nonaligned.bin"   # must print 1000003
-   cmp "$SOURCE" "$MOUNT/nonaligned.bin"  # exit 0
-   ```
+Run the first RW acceptance inside an isolated macOS lume VM with this worktree,
+fixtures and the installed candidate available in the guest. Do not send live
+commands back to the host. The script requires `kern.hv_vmm_present=1`; its only
+host override, `--allow-host-readonly`, runs exclusively the RO subset and no bench.
 
-   Also assert pread at EOF returns no bytes. For a visible zero-tail test, grow this disposable file to its next cluster boundary, fsync/remount and assert every newly exposed byte is zero, then restore the exact original length and repeat stat/cmp. This is pending mounted verification, not the already-green raw-engine test.
-6. Keep a bounded log stream during the first corrected write (`process == "YuzuNTFSModule" OR subsystem BEGINSWITH "com.apple.fskit"`), record extension PID and sample if stalled, and `ps -o pid,uid,state,wchan,command -p <copy-pid>`. Avoid another unbounded Python wait for a kernel-U child. If it wedges again, revoke serial first and escalate; no daemon/reboot workaround without owner action.
-7. Cleanly unmount/detach; remove fixture serial even on failure. Retain only evidence, not a background log stream or helper process.
+```sh
+scripts/p0-guest-acceptance.sh --dry-run
+# Inside the recovered guest ONLY; dedicated >=8 GiB NTFS bench image, detached:
+scripts/p0-guest-acceptance.sh --bench-image "$PWD/build/r3/bench-ntfs.img"
+# Optional recovered-host RO subset, never a bypass for RW:
+scripts/p0-guest-acceptance.sh --allow-host-readonly
+```
 
-### 3. Dedicated 8 GiB images and benchmark rows
+Each phase uses the existing non-mounted-I/O supervisor, finite total/command
+deadlines and parent-owned fixture authorization. On failure/timeout it revokes
+before signaling its owned process group, reports surviving PID/possible image
+attachments, never blocks reaping a state-U child and never force-unmounts/kills
+filesystem daemons. Stop and investigate surviving attachments before another run.
+
+The RO phase checks the resident SHA-256, observed buffered-read callback and
+unchanged image hash. The RW phase verifies resident append/remount, the formerly
+wedging exact 1,000,003-byte cp/stat/cmp/remount/EOF workload, 37-byte write then
+ftruncate(8192) zeros and remount readback, ADS write-open refusal, and pre-latch
+FD plus mmap writeback transitions. Logs must contain actual `blockmapFile` and
+`completeIO`; a successful copy via an unproven transport is not acceptance.
+Only after every gate succeeds does it invoke the existing bounded bench harness.
+Evidence, fixture copies and callback logs are retained under `build/p0-guest/`.
+
+The **P0-only** fault hook is
+`~/Library/Containers/com.bluecoral.vn.yuzuntfs.fsmodule/Data/Library/Application Support/YuzuNTFS/p0-force-ro`.
+Its presence latches effective RO on the next operation. Writes/map/completion
+then reply EROFS; removing the file does not unlatch an existing volume. The guest
+test removes it and remounts between FD/mmap cases. A stale hook makes a subsequent
+acceptance refuse until explicitly removed. Remove this hook in P1 (Q-R2).
+Eligibility is fixed at item publication (Q-R1), not flipped on RO. Previously
+retained kernel mappings are **not physically revoked**; the guest gate deliberately
+fails if cached FD/mmap writeback succeeds. T7-R5's unreported cached-write ordering
+limitation is still open. The inhibited-write root cause remains inferred/plausible,
+not proved fixed by headless tests; TT is a byte-copy engine oracle, not a KOIO oracle.
+
+### 5. Dedicated 8 GiB images and benchmark rows
 
 Create partitionless image files under `build/r3/`; never format a device not derived from a freshly attached owned image. An exFAT image was successfully created using an 8 GiB truncated regular file, `hdiutil attach -nomount -plist`, then `/sbin/newfs_exfat -v YUZUR3EXFAT <derived-device>` (no sudo). `hdiutil create` formatting returned EPERM on this host, so don't silently switch to physical media. For NTFS, truncate a new file to 8 GiB and use `tools/bin/mkntfs -F -Q -L YUZUR3NTFS <image-file>` while detached.
 

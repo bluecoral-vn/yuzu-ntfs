@@ -17,6 +17,7 @@
             <key>shortOptions</key><string>o:</string>
         </dict>
         <key>FSSupportsBlockResources</key><true/>
+        <key>FSSupportsKernelOffloadedIO</key><true/>
         <key>FSMediaTypes</key>
         <dict>
             <key>Partitionless</key>
