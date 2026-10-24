@@ -16,6 +16,7 @@ static void e2_precalc_free_clusters(struct work_struct *work);
 #include "../../../../upstream/ttntfs/core/ntfs/super.c"
 #undef kzalloc
 int e2_fail_free_init(struct ntfs_bdev *);
+void e2_report_initialization_error(struct ntfs_bdev *, int);
 static void e2_precalc_free_clusters(struct work_struct *work)
 {
     struct ntfs_volume *vol = container_of(work, struct ntfs_volume, precalc_work);
@@ -24,6 +25,9 @@ static void e2_precalc_free_clusters(struct work_struct *work)
     fail_ra_size = 0;
     if (!NVolFreeClusterKnown(vol)) {
         /* A terminated producer must never leave allocation/statfs waiting. */
+        /* Publish the actual cause before errors/RO can make ntfs_mount
+         * reject the volume through its generic EROFS reason ladder. */
+        e2_report_initialization_error(vol->sb->s_bdev, ENOMEM);
         atomic64_set(&vol->free_clusters, -ENOMEM);
         NVolSetErrors(vol);
         vol->sb->s_flags |= SB_RDONLY;

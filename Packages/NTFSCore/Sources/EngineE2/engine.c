@@ -33,8 +33,13 @@ struct nb_volume {
     pthread_mutex_t lock;
     pthread_mutex_t callback_lock;
     int no_io;
+    int initialization_error; /* Atomic producer error; survives TT mount teardown. */
     unsigned test_faults;
 };
+void e2_report_initialization_error(struct ntfs_bdev *dev, int error) {
+    nb_volume *v = dev->priv;
+    __atomic_store_n(&v->initialization_error, error, __ATOMIC_SEQ_CST);
+}
 static int positive(int rc) { return rc < 0 ? -rc : rc; }
 /* TT's public inode_get rejects nlink==0 even while the inode is held.
  * Resolve retained FSKit handles before falling back to namespace lookup. */
@@ -162,6 +167,11 @@ int nb_e2_test_mount(const nb_blockdev *dev, int rw, unsigned faults, nb_volume 
     if (rc) { free(v); return rc; }
     struct ntfs_mount_options opts = { .flags = NTFS_MOUNT_CASE_SENSITIVE | (rw ? 0 : NTFS_MOUNT_RDONLY) };
     rc = positive(ntfs_mount(&v->bdev, &opts, &v->core));
+    /* The worker can fail before TT's post-load RO ladder (which collapses
+     * its cause to EROFS), or later. Preserve the producer's terminal cause
+     * in the early case; the successful-mount path joins it below. */
+    int initialization_error = __atomic_load_n(&v->initialization_error, __ATOMIC_SEQ_CST);
+    if (initialization_error) rc = initialization_error;
     if (!rc) {
         ntfs_inode_t *root;
         rc = positive(ntfs_volume_root(v->core, &root));
