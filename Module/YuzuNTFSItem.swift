@@ -3,6 +3,38 @@ import Foundation
 import FSKit
 import NTFSBridge
 
+enum YuzuNTFSBoundary {
+    static func errorCode(_ error: any Error) -> Int32 {
+        Int32(exactly: (error as NSError).code) ?? EIO
+    }
+    static func adding(_ lhs: UInt64, _ rhs: UInt64) throws -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        guard !overflow else { throw POSIXError(.EOVERFLOW) }
+        return sum
+    }
+    static func offset(_ value: UInt64) throws -> off_t {
+        guard let offset = off_t(exactly: value) else { throw POSIXError(.EOVERFLOW) }
+        return offset
+    }
+}
+
+struct YuzuNTFSGeometry {
+    let sector: Int
+    let bridgeSector: UInt32
+    let bytes: UInt64
+    let probeLength: Int
+    init(blockSize: UInt64, blockCount: UInt64, physicalBlockSize: UInt64) throws {
+        guard let sector = Int(exactly: blockSize), let bridgeSector = UInt32(exactly: blockSize),
+              let physical = Int(exactly: physicalBlockSize) else { throw POSIXError(.EOVERFLOW) }
+        guard sector == 512 || sector == 4096, blockCount > 0,
+              physical > 0, physical <= 1_048_576, physical.nonzeroBitCount == 1 else { throw POSIXError(.EINVAL) }
+        let (bytes, overflow) = blockSize.multipliedReportingOverflow(by: blockCount)
+        guard !overflow, bytes <= UInt64(Int64.max) else { throw POSIXError(.EOVERFLOW) }
+        self.sector = sector; self.bridgeSector = bridgeSector; self.bytes = bytes
+        probeLength = max(512, sector, physical)
+    }
+}
+
 final class YuzuNTFSItem: FSItem {
     let ref: UInt64
     var parent: UInt64
@@ -21,12 +53,16 @@ final class YuzuNTFSItem: FSItem {
         guard operation == nil else { throw POSIXError(.EBUSY) }
         return try body()
     }
-    func changingSize<T>(to size: UInt64?, _ body: () throws -> T) throws -> T {
+    func changingSize<T>(_ body: () throws -> T) rethrows -> T {
         io.lock(); defer { io.unlock() }
-        if let size, operation != nil, extents.contains(where: {
+        return try body()
+    }
+    // Called only while changingSize holds io, with the volume lock held too.
+    func checkShrink(to size: UInt64, currentSize: UInt64) throws {
+        guard size < currentSize, operation != nil else { return }
+        if extents.contains(where: {
             $0.length > UInt64.max - $0.logical || $0.logical + $0.length > size
         }) { throw POSIXError(.EBUSY) }
-        return try body()
     }
     static func mutating<T>(_ first: YuzuNTFSItem, replacing second: YuzuNTFSItem?, _ body: () throws -> T) throws -> T {
         guard let second, second !== first else { return try first.normal(body) }

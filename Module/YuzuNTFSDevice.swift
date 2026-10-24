@@ -23,14 +23,17 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
     }
     private var cached = Set<Int64>()
     private let scratch: UnsafeMutableRawPointer
-    init(_ resource: FSBlockDeviceResource) {
+    private let geometry: YuzuNTFSGeometry
+    init(_ resource: FSBlockDeviceResource) throws {
+        let geometry = try YuzuNTFSGeometry(blockSize: resource.blockSize, blockCount: resource.blockCount, physicalBlockSize: resource.physicalBlockSize)
         self.resource = resource
-        scratch = .allocate(byteCount: Int(resource.blockSize), alignment: 4096)
+        self.geometry = geometry
+        scratch = .allocate(byteCount: geometry.sector, alignment: 4096)
     }
     deinit { scratch.deallocate() }
     var blockdev: nb_blockdev {
         nb_blockdev(ctx: Unmanaged.passUnretained(self).toOpaque(),
-                    size: resource.blockCount * UInt64(resource.blockSize), sector_size: UInt32(resource.blockSize),
+                    size: geometry.bytes, sector_size: geometry.bridgeSector,
                     read: { ctx, off, buf, len in
             Unmanaged<YuzuNTFSDevice>.fromOpaque(ctx!).takeUnretainedValue().transfer(off, buf!, len, write: false)
         }, write: { ctx, off, buf, len in
@@ -38,13 +41,13 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
         }, flush: { ctx in
             let device = Unmanaged<YuzuNTFSDevice>.fromOpaque(ctx!).takeUnretainedValue()
             do { if device.metadataActive { try device.resource.metadataFlush() }; return 0 }
-            catch { return Int32((error as NSError).code) }
+            catch { return YuzuNTFSBoundary.errorCode(error) }
         })
     }
     private func transfer(_ offset: UInt64, _ buffer: UnsafeMutableRawPointer, _ length: Int, write: Bool) -> Int32 {
         lock.lock(); defer { lock.unlock() }
-        guard offset <= UInt64(Int64.max), UInt64(length) <= UInt64(Int64.max) - offset else { return EFBIG }
-        let sector = Int(resource.blockSize)
+        guard length >= 0, offset <= geometry.bytes, UInt64(length) <= geometry.bytes - offset else { return EOVERFLOW }
+        let sector = geometry.sector
         do {
             var done = 0
             while done < length {
@@ -74,19 +77,25 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
                 done += count
             }
             return 0
-        } catch { return Int32((error as NSError).code) }
+        } catch { return YuzuNTFSBoundary.errorCode(error) }
     }
     /// Purge only engine-touched sectors before handing them to kernel data I/O.
     func purge<Extents: Collection>(_ extents: Extents) throws where Extents.Element == nb_extent {
         lock.lock(); defer { lock.unlock() }
         guard metadataActive else { return }
-        let sector = Int64(resource.blockSize)
-        let touched = cached.filter { base in extents.contains { extent in
-            extent.kind != NB_EXT_HOLE && UInt64(base) < extent.physical + extent.length && UInt64(base + sector) > extent.physical
-        } }
+        let sector = UInt64(geometry.sector)
+        var touched: [Int64] = []
+        for base in cached {
+            guard let start = UInt64(exactly: base) else { throw POSIXError(.EIO) }
+            let end = try YuzuNTFSBoundary.adding(start, sector)
+            for extent in extents where extent.kind != NB_EXT_HOLE {
+                let extentEnd = try YuzuNTFSBoundary.adding(extent.physical, extent.length)
+                if start < extentEnd && end > extent.physical { touched.append(base); break }
+            }
+        }
         guard !touched.isEmpty else { return }
         try resource.metadataFlush()
-        try resource.metadataPurge(touched.map { FSMetadataRange(offset: $0, segmentLength: UInt64(sector), segmentCount: 1) })
+        try resource.metadataPurge(touched.map { FSMetadataRange(offset: $0, segmentLength: sector, segmentCount: 1) })
         cached.subtract(touched)
     }
 }

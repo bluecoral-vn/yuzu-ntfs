@@ -26,6 +26,9 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     let api: nb_engine
     private var core: OpaquePointer?
     private var terminalReadOnly = false
+    #if DEBUG
+    var beforeSizeLock: (() -> Void)?
+    #endif
     private func effectivelyWritable() -> Bool {
         guard writable, core != nil, !terminalReadOnly else { return false }
         var state = nb_stat()
@@ -34,9 +37,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     private let items = YuzuNTFSItemTable()
     private var rootRef: UInt64 = 5
-    convenience init(device: FSBlockDeviceResource, boot: NTFSBootSector, readOnly: Bool = false) {
+    convenience init(device: FSBlockDeviceResource, boot: NTFSBootSector, readOnly: Bool = false) throws {
         let writable = !readOnly && WriteAllowlist.permits(serial: boot.serial, contents: try? String(contentsOf: WriteAllowlist.fileURL, encoding: .utf8)) && device.isWritable
-        self.init(device: YuzuNTFSDevice(device), boot: boot, writable: writable, api: nb_engine_e2()!.pointee)
+        let adapter = try YuzuNTFSDevice(device)
+        self.init(device: adapter, boot: boot, writable: writable, api: nb_engine_e2()!.pointee)
     }
     init(device: any YuzuNTFSDeviceAccess, boot: NTFSBootSector, writable: Bool, api: nb_engine) {
         self.device = device
@@ -71,7 +75,9 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             try prepare(item)
         }, reply: reply)
     }
-    private func id(_ ref: UInt64) -> FSItem.Identifier { ref == rootRef ? .rootDirectory : FSItem.Identifier(ref + 16) }
+    private func id(_ ref: UInt64) throws -> FSItem.Identifier {
+        ref == rootRef ? .rootDirectory : FSItem.Identifier(try YuzuNTFSBoundary.adding(ref, 16))
+    }
     private func units(_ name: FSFileName) throws -> [UInt16] {
         guard let text = name.string else { throw POSIXError(.EILSEQ) }
         return Array(text.utf16)
@@ -79,16 +85,16 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     private func attributes(_ item: YuzuNTFSItem) throws -> FSItem.Attributes {
         var attr = nb_attr()
         try check(api.nb_getattr!(core, item.ref, item.parent, &attr))
-        return attributes(attr)
+        return try attributes(attr)
     }
-    private func attributes(_ attr: nb_attr) -> FSItem.Attributes {
+    private func attributes(_ attr: nb_attr) throws -> FSItem.Attributes {
         let result = FSItem.Attributes()
         result.type = attr.type == NB_DIR ? .directory : attr.type == NB_SYMLINK ? .symlink : .file
         result.mode = attr.type == NB_DIR ? 0o755 : 0o644
         result.uid = getuid(); result.gid = getgid()
         result.linkCount = attr.nlink
         result.size = attr.size; result.allocSize = attr.alloc_size
-        result.fileID = id(attr.ref); result.parentID = id(attr.parent_ref)
+        result.fileID = try id(attr.ref); result.parentID = try id(attr.parent_ref)
         result.flags = attr.ntfs_attrs & 2 != 0 ? UInt32(UF_HIDDEN) : 0
         // T7-R4: on RW mounts the first actual mapping promotes resident data.
         // RO resident reads stay on the byte-copy path and never mutate disk.
@@ -217,10 +223,18 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     func setAttributes(_ request: FSItem.SetAttributesRequest, on item: FSItem, replyHandler reply: @escaping (FSItem.Attributes?, (any Error)?) -> Void) {
         do { let node = try node(item)
-            var current = nb_attr()
-            if request.isValid(.size) { try serial { try check(api.nb_getattr!(core, node.ref, node.parent, &current)) } }
-            let truncatedTail = request.isValid(.size) && request.size < current.size ? request.size : nil
-            let a = try node.changingSize(to: truncatedTail) { try serial { try apply(request, to: node); return try attributes(node) } }
+            #if DEBUG
+            beforeSizeLock?()
+            #endif
+            let a = try node.changingSize { try serial {
+                if request.isValid(.size) {
+                    var current = nb_attr()
+                    try check(api.nb_getattr!(core, node.ref, node.parent, &current))
+                    try node.checkShrink(to: request.size, currentSize: current.size)
+                }
+                try apply(request, to: node)
+                return try attributes(node)
+            } }
             reply(a, nil)
         } catch { reply(nil, error) }
     }
@@ -268,17 +282,27 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 let item = try node(directory)
                 guard verifier.rawValue == 0 || verifier.rawValue == item.version else { throw POSIXError(.ESTALE) }
                 if request == nil {
-                    if cookie.rawValue == 0 && !packer.packEntry(name: FSFileName(string: "."), itemType: .directory, itemID: id(item.ref), nextCookie: FSDirectoryCookie(rawValue: 1), attributes: nil) { return item.version }
-                    if cookie.rawValue <= 1 && !packer.packEntry(name: FSFileName(string: ".."), itemType: .directory, itemID: id(item.parent), nextCookie: FSDirectoryCookie(rawValue: 2), attributes: nil) { return item.version }
+                    if cookie.rawValue == 0 {
+                        if !(try packer.packEntry(name: FSFileName(string: "."), itemType: .directory, itemID: id(item.ref), nextCookie: FSDirectoryCookie(rawValue: 1), attributes: nil)) { return item.version }
+                    }
+                    if cookie.rawValue <= 1 {
+                        if !(try packer.packEntry(name: FSFileName(string: ".."), itemType: .directory, itemID: id(item.parent), nextCookie: FSDirectoryCookie(rawValue: 2), attributes: nil)) { return item.version }
+                    }
                 }
                 let context = Enumeration(volume: self, packer: packer, attributes: request != nil)
                 try check(api.nb_readdir!(core, item.ref, cookie.rawValue > 2 ? cookie.rawValue - 2 : 0, { opaque, name, count, attr, next in
                     let c = Unmanaged<Enumeration>.fromOpaque(opaque!).takeUnretainedValue()
                     let a = attr!.pointee
                     let text = String(decoding: UnsafeBufferPointer(start: name, count: count), as: UTF16.self)
-                    return c.packer.packEntry(name: FSFileName(string: text), itemType: a.type == NB_DIR ? .directory : .file,
-                        itemID: c.volume.id(a.ref), nextCookie: FSDirectoryCookie(rawValue: next + 2), attributes: c.attributes ? c.volume.attributes(a) : nil) ? 0 : 1
+                    do {
+                        let identifier = try c.volume.id(a.ref)
+                        let cookie = try YuzuNTFSBoundary.adding(next, 2)
+                        let attributes = c.attributes ? try c.volume.attributes(a) : nil
+                        return c.packer.packEntry(name: FSFileName(string: text), itemType: a.type == NB_DIR ? .directory : .file,
+                            itemID: identifier, nextCookie: FSDirectoryCookie(rawValue: cookie), attributes: attributes) ? 0 : 1
+                    } catch { c.error = error; return 1 }
                 }, Unmanaged.passUnretained(context).toOpaque()))
+                if let error = context.error { throw error }
                 return item.version
             }
             reply(FSDirectoryVerifier(rawValue: version), nil)
@@ -287,6 +311,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     private final class Enumeration {
         let volume: YuzuNTFSVolume, packer: FSDirectoryEntryPacker
         let attributes: Bool
+        var error: (any Error)?
         init(volume: YuzuNTFSVolume, packer: FSDirectoryEntryPacker, attributes: Bool) { self.volume = volume; self.packer = packer; self.attributes = attributes }
     }
     func read(from item: FSItem, at offset: off_t, length: Int, into buffer: FSMutableFileDataBuffer, replyHandler reply: @escaping (Int, (any Error)?) -> Void) {
@@ -327,13 +352,17 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     try device.purge(extents)
                     if operationID != .unspecified { item.extents.append(contentsOf: extents) }
                     for extent in extents {
+                        _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.logical, extent.length))
+                        _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, extent.length))
                         var done: UInt64 = 0
                         while done < extent.length {
                             let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
                             let zero = extent.kind == NB_EXT_HOLE || (extent.kind == NB_EXT_UNINIT && !flags.contains(.write))
+                            let logical = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.logical, done))
+                            let physical = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, done))
                             guard let resource = device.extentResource else { throw POSIXError(.ENODEV) }
                             if !packer.packExtent(resource: resource, type: zero ? .zeroFill : .data,
-                                logicalOffset: off_t(extent.logical + done), physicalOffset: off_t(extent.physical + done), length: Int(chunk)) { return false }
+                                logicalOffset: logical, physicalOffset: physical, length: Int(chunk)) { return false }
                             done += chunk
                         }
                     }
@@ -360,7 +389,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     }
                 }
                 try device.purge(tracked ? item.extents : cachedExtents)
-                try check(api.nb_complete_io!(core, item.ref, UInt64(offset), UInt64(length), status.map { Int32(($0 as NSError).code) } ?? 0, flags.contains(.write) ? 1 : 0))
+                try check(api.nb_complete_io!(core, item.ref, UInt64(offset), UInt64(length), status.map { YuzuNTFSBoundary.errorCode($0) } ?? 0, flags.contains(.write) ? 1 : 0))
                 try device.purge(tracked ? item.extents : cachedExtents)
             } }
             reply(nil)

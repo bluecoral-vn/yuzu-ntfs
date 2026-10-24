@@ -18,6 +18,7 @@ private final class HandlerDevice: YuzuNTFSDeviceAccess {
 private final class HandlerCore {
     var readOnly = false
     var failure: Int32 = 0
+    var size: UInt64 = 8192
     var flags: UInt32 = UInt32(NB_RESIDENT)
     var mounts = 0
     var closes = 0
@@ -25,6 +26,9 @@ private final class HandlerCore {
     var created = false
     var failHold = false
     var failSetattr = false
+    var completedStatus: Int32?
+    var mappingPhysical: UInt64?
+    var directoryCookie: UInt64?
     static func state(_ pointer: OpaquePointer?) -> HandlerCore { Unmanaged<HandlerCore>.fromOpaque(UnsafeRawPointer(pointer!)).takeUnretainedValue() }
     var api: nb_engine {
         var api = nb_engine()
@@ -43,17 +47,40 @@ private final class HandlerCore {
         api.nb_getattr = { core, ref, parent, out in
             let s = HandlerCore.state(core); if s.failure != 0 { return s.failure }
             out!.pointee = nb_attr(); out!.pointee.ref = ref; out!.pointee.parent_ref = parent
-            out!.pointee.size = ref == 5 ? 0 : 8192
+            out!.pointee.size = ref == 5 ? 0 : s.size
             out!.pointee.type = ref == 5 ? NB_DIR : NB_FILE; out!.pointee.flags = s.flags; return 0
         }
         api.nb_lookup = { core, _, _, _, out in let s = HandlerCore.state(core); out!.pointee.ref = 42; out!.pointee.parent_ref = 5; return s.failure }
         api.nb_create = { core, _, _, _, _, out in let s = HandlerCore.state(core); if s.failure != 0 { return s.failure }; s.created = true; out!.pointee.ref = 42; out!.pointee.parent_ref = 5; return 0 }
-        api.nb_setattr = { core, _, _, _ in let s = HandlerCore.state(core); return s.failSetattr ? ENOSPC : s.failure }
+        api.nb_setattr = { core, _, attr, valid in
+            let s = HandlerCore.state(core)
+            if s.failSetattr { return ENOSPC }; if s.failure != 0 { return s.failure }
+            if valid & UInt32(NB_SET_SIZE) != 0 { s.size = attr!.pointee.size }
+            return 0
+        }
         api.nb_remove = { core, _, _, _ in let s = HandlerCore.state(core); s.removes += 1; s.created = false; return s.failure }
         api.nb_rename = { core, _, _, _, _, _, _ in HandlerCore.state(core).failure }
         api.nb_read = { core, _, _, _, _, got in got!.pointee = 0; return HandlerCore.state(core).failure }
         api.nb_write = { core, _, _, _, _ in HandlerCore.state(core).failure }
-        api.nb_complete_io = { core, _, _, _, _, _ in HandlerCore.state(core).failure }
+        api.nb_complete_io = { core, _, _, _, status, _ in let s = HandlerCore.state(core); s.completedStatus = status; return s.failure }
+        api.nb_blockmap = { core, _, offset, length, _, buffer, capacity, count in
+            let s = HandlerCore.state(core)
+            if s.failure != 0 { return s.failure }
+            guard let physical = s.mappingPhysical, capacity > 0 else { return ENOTSUP }
+            buffer!.pointee = nb_extent(logical: offset, physical: physical, length: length, kind: UInt32(NB_EXT_DATA))
+            count!.pointee = 1
+            return 0
+        }
+        api.nb_readdir = { core, _, _, callback, context in
+            let s = HandlerCore.state(core)
+            if s.failure != 0 { return s.failure }
+            if let cookie = s.directoryCookie {
+                var name: UInt16 = 120
+                var attr = nb_attr(); attr.ref = 42; attr.parent_ref = 5; attr.type = NB_FILE
+                _ = callback!(context, &name, 1, &attr, cookie)
+            }
+            return 0
+        }
         return api
     }
     func volume() throws -> YuzuNTFSVolume {
@@ -245,4 +272,96 @@ private final class BusyItemProbe: @unchecked Sendable {
     let completed = ReplyOnce()
     volume.setAttributes(request, on: item) { _, error in completed.accept(error) }
     completed.assertOnce(); #expect(completed.error == nil)
+}
+
+@Test func concurrentGrowthCannotTurnOldGrowthSnapshotIntoUnsafeShrink() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, _ in }
+    let item = YuzuNTFSItem(ref: 42, parent: 5)
+    volume.beforeSizeLock = {
+        volume.beforeSizeLock = nil
+        let growth = FSItem.SetAttributesRequest(); growth.size = 16384
+        volume.setAttributes(growth, on: item) { _, error in #expect(error == nil) }
+        item.io.lock()
+        item.operation = FSOperationID(rawValue: 55)
+        item.extents = [nb_extent(logical: 12288, physical: 65536, length: 4096, kind: UInt32(NB_EXT_DATA))]
+        item.io.unlock()
+    }
+    let staleGrowth = FSItem.SetAttributesRequest(); staleGrowth.size = 12288
+    let reply = ReplyOnce()
+    volume.setAttributes(staleGrowth, on: item) { _, error in reply.accept(error) }
+    reply.assertOnce(); #expect((reply.error as NSError?)?.code == Int(EBUSY))
+    #expect(core.size == 16384)
+    #expect(item.extents.first?.physical == 65536)
+}
+
+@Test func completionMapsUnrepresentableErrorCodeToEIO() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, _ in }
+    let item = YuzuNTFSItem(ref: 42, parent: 5), reply = ReplyOnce()
+    volume.completeIO(for: item, offset: 0, length: 0, status: NSError(domain: "test", code: Int.max), flags: [.write], operationID: .unspecified, replyHandler: reply.accept)
+    reply.assertOnce()
+    #expect(core.completedStatus == EIO)
+}
+@Test func overflowingReferenceRepliesWithErrorRatherThanTrapping() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, _ in }
+    let item = YuzuNTFSItem(ref: UInt64.max, parent: 5), reply = ReplyOnce()
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in reply.accept(error) }
+    reply.assertOnce(); #expect((reply.error as NSError?)?.code == Int(EOVERFLOW))
+}
+
+private final class OversizedBlockResource: FSBlockDeviceResource {
+    override var blockSize: UInt64 { UInt64.max }
+    override var blockCount: UInt64 { 2 }
+    override var physicalBlockSize: UInt64 { 4096 }
+}
+@Test func unrepresentableDeviceGeometryIsAnErrorNotATrap() {
+    let resource = class_createInstance(OversizedBlockResource.self, 0) as! OversizedBlockResource
+    do {
+        _ = try YuzuNTFSDevice(resource)
+        Issue.record("Invalid resource geometry was accepted")
+    } catch {
+        #expect([Int(EINVAL), Int(EOVERFLOW)].contains((error as NSError).code))
+    }
+}
+
+@Test func geometryOverflowRepliesFromFilesystemHandlers() {
+    let filesystem = YuzuNTFSFileSystem()
+    let resource = class_createInstance(OversizedBlockResource.self, 0) as! OversizedBlockResource
+    let probe = ReplyOnce(), load = ReplyOnce()
+    filesystem.probeResource(resource: resource) { _, error in probe.accept(error) }
+    filesystem.loadResource(resource: resource, options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in load.accept(error) }
+    probe.assertOnce(); load.assertOnce()
+    #expect((probe.error as NSError?)?.code == Int(EOVERFLOW))
+    #expect((load.error as NSError?)?.code == Int(EOVERFLOW))
+}
+
+@Test func invalidGeometryProductsAndPhysicalRangesAreChecked() {
+    for (size, count, physical): (UInt64, UInt64, UInt64) in [
+        (512, UInt64.max, 512), (4096, 1, UInt64.max), (0, 1, 512), (512, 0, 512)
+    ] {
+        #expect(throws: (any Error).self) {
+            _ = try YuzuNTFSGeometry(blockSize: size, blockCount: count, physicalBlockSize: physical)
+        }
+    }
+    #expect(YuzuNTFSBoundary.errorCode(NSError(domain: "test", code: Int.min)) == EIO)
+    #expect(throws: (any Error).self) { _ = try YuzuNTFSBoundary.adding(UInt64.max, 1) }
+    #expect(throws: (any Error).self) { _ = try YuzuNTFSBoundary.offset(UInt64.max) }
+}
+
+@Test func overflowingBridgeCookieAndPhysicalRangeReplyOnce() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, _ in }
+    core.mappingPhysical = UInt64.max
+    core.directoryCookie = UInt64.max
+    let map = ReplyOnce(), enumeration = ReplyOnce()
+    volume.blockmapFile(YuzuNTFSItem(ref: 42, parent: 5), offset: 0, length: 512, flags: [], operationID: .unspecified,
+        packer: class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker, replyHandler: map.accept)
+    volume.enumerateDirectory(YuzuNTFSItem(ref: 5, parent: 5), startingAt: FSDirectoryCookie(rawValue: 0),
+        verifier: FSDirectoryVerifier(rawValue: 0), attributes: FSItem.GetAttributesRequest(),
+        packer: class_createInstance(FSDirectoryEntryPacker.self, 0) as! FSDirectoryEntryPacker) { _, error in enumeration.accept(error) }
+    map.assertOnce(); enumeration.assertOnce()
+    #expect((map.error as NSError?)?.code == Int(EOVERFLOW))
+    #expect((enumeration.error as NSError?)?.code == Int(EOVERFLOW))
 }
