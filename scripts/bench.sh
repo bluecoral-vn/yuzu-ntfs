@@ -28,13 +28,14 @@ def revoke():
     remaining = [x for x in current if x.upper() != serial]
     if remaining != current: allow.write_text(''.join(x + '\n' for x in remaining))
 atexit.register(revoke)
+def authorize():
+    if not serial: return
+    allow.parent.mkdir(parents=True, exist_ok=True)
+    allow.write_text('\n'.join(dict.fromkeys(existing + [serial])) + '\n')
 if __name__ == '__main__':
     sys.path.insert(0, str(root / 'scripts'))
     from bench_supervisor import supervise
-    supervise(revoke, str(image), float(os.environ.get('BENCH_TIMEOUT', '1800')))
-if serial:
-    allow.parent.mkdir(parents=True, exist_ok=True)
-    allow.write_text('\n'.join(dict.fromkeys(existing + [serial])) + '\n')
+    supervise(revoke, str(image), float(os.environ.get('BENCH_TIMEOUT', '1800')), authorize=authorize)
 
 def checked_device():
     images = plistlib.loads(subprocess.check_output(['hdiutil', 'info', '-plist']))['images']

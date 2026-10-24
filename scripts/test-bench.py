@@ -17,6 +17,32 @@ SCRIPT = pathlib.Path(__file__).with_name('bench.sh')
 PREFIX = SCRIPT.read_text().split("<<'PY'\n", 1)[1].split('def checked_device():', 1)[0]
 
 class BenchPreflight(unittest.TestCase):
+    def test_termination_during_parent_setup_never_releases_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            allow = pathlib.Path(directory) / 'allow'
+            code = f"""
+import atexit, os, pathlib, signal, sys, time
+sys.path.insert(0, {str(SCRIPT.parent)!r})
+import bench_supervisor as supervisor
+allow = pathlib.Path({str(allow)!r})
+def revoke():
+    allow.unlink(missing_ok=True)
+atexit.register(revoke)
+original = os.setpgid
+def interrupted_setup(pid, group):
+    original(pid, group)
+    if pid > 0:
+        os.kill(os.getpid(), signal.SIGTERM)
+supervisor.os.setpgid = interrupted_setup
+supervisor.supervise(revoke, 'startup fixture', 3)
+time.sleep(0.05)
+allow.write_text('worker reauthorized')
+os._exit(0)
+"""
+            result = subprocess.run([sys.executable, '-c', code], capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr.decode())
+            self.assertFalse(allow.exists(), result.stderr.decode())
+
     def test_supervisor_deadline_revokes_before_terminating_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = pathlib.Path(directory) / 'revoked'
