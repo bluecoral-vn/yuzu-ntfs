@@ -117,6 +117,24 @@ class P0PureTests(unittest.TestCase):
             self.assertEqual(ops.active_fskit(recorded + extra), [extra.rstrip()])
             self.assertTrue(ops.active_fskit(recorded + recorded))
 
+    def test_kernel_nullfs_translocations_and_flagged_transports(self):
+        recorded = [
+            '/Applications/Sublime Merge.app on /private/var/folders/vf/l44gfxzd5bj3xhlpjlf9qy5w0000gn/T/AppTranslocation/8C44EA7B-5D66-423C-89D0-B9909247AEF8 (nullfs, local, nodev, nosuid, read-only, nobrowse, mounted by rom)',
+            '/Applications/Sublime Text.app on /private/var/folders/vf/l44gfxzd5bj3xhlpjlf9qy5w0000gn/T/AppTranslocation/6E552FE6-52A9-493A-8C41-88664FF17CA1 (nullfs, local, nodev, nosuid, read-only, nobrowse, mounted by rom)',
+        ]
+        self.assertEqual(ops.active_fskit('\n'.join(recorded)), [])
+        for line in recorded:
+            flagged = line.replace('nullfs,', 'nullfs, fskit,')
+            self.assertEqual(ops.active_fskit(flagged), [flagged])
+        for kind in ['apfs', 'hfs', 'nullfs', 'devfs', 'autofs', 'smbfs', 'nfs', 'msdos', 'exfat']:
+            line = f'/dev/test on /Volumes/test ({kind}, local)'
+            self.assertEqual(ops.active_fskit(line), [])
+            flagged = line.replace(', local', ', fskit, local')
+            self.assertEqual(ops.active_fskit(flagged), [flagged])
+        for kind in ['yuzuntfs', 'ntfs', 'lifs', 'devicefs']:
+            line = f'/dev/test on /Volumes/test ({kind}, local)'
+            self.assertEqual(ops.active_fskit(line), [line])
+
     def test_recovery_requires_reboot_or_no_u_and_old_pid_absent(self):
         old = '{ sec = 1, usec = 0 }'
         new = '{ sec = ' + str(int(ops.WEDGED_AT) + 1) + ', usec = 0 }'

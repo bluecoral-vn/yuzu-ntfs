@@ -186,6 +186,10 @@ one Apple CoreDevice mount: type `devicefs`, mountpoint
 `devices -- file://$HOME/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/`.
 A second DeviceFS or any other FSKit/unknown user transport still blocks. This
 exception does not authorize mounting or changing CoreDevice registrations.
+Owner ruling Q-R5 classifies kernel-native `nullfs` (including AppTranslocation),
+`msdos` and `exfat` without an `fskit` mount flag as safe for agent refresh, like
+the existing native types. An `fskit` flag always blocks except the exact Q-R4
+exception; Yuzu/NTFS and unknown transports remain blocked even without that flag.
 Every external command has a deadline and failure stops the procedure.
 
 Install inventories `pluginkit -mADvvv` plus all Yuzu-identifier `.app` bundles in

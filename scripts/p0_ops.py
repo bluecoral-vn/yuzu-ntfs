@@ -66,7 +66,8 @@ def is_vm(output):
 def active_fskit(mount_output):
     # Q-R4 permits one exact Apple CoreDevice transport during agent refresh.
     # All other unknown/user transports remain fail-closed.
-    native = {'apfs', 'hfs', 'devfs', 'autofs', 'nfs', 'smbfs', 'webdav', 'udf', 'cd9660'}
+    # Q-R5: kernel-native transports are safe only without the FSKit flag.
+    native = {'apfs', 'hfs', 'nullfs', 'devfs', 'autofs', 'nfs', 'smbfs', 'webdav', 'udf', 'cd9660', 'msdos', 'exfat'}
     home = Path.home()
     coredevice_source = 'devices -- ' + (home / 'Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data').as_uri() + '/'
     coredevice_mount = str(home / 'Library/Developer/CoreDevice/DeviceFS')
