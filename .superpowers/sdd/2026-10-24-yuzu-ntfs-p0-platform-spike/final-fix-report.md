@@ -2,9 +2,9 @@
 
 ## Verdict
 
-**Incomplete acceptance: G1's exhaustive handler × every-branch reply-once coverage is not implemented. Do not resume mounted writes.** The behavioral safety changes below are implemented, with the evidence and TDD limitations explicitly distinguished. No upstream file was edited, no ABI member was reordered, and no push, mount, attachment, installation, disk-management probe or notarization was performed. The requested Debug app build includes its existing ad-hoc build phase; it was not installed. T7-R1, T7-R4 and T7-R5 remain binding. F-R1/F-R2 were supplied by Main during this fix wave.
+**Latest targeted round complete: N1–N4 and T1–T3 are addressed, with the final-source matrix passing.** G1 is evaluated under Main's amended FR-1 complete static reply-path audit; the earlier incomplete/exhaustive-runtime verdicts below are retained as historical wave evidence and superseded by the targeted FR-1 section. Actual SDK branch tests are not claimed where unexercised. No upstream file was edited, no ABI member reordered, and no push, host mount/attachment, installation, disk-management probe or notarization performed. FR-2 permits the existing ad-hoc Debug build phase only. T7-R1, T7-R4 and T7-R5 remain binding. Owner transport recovery/reboot and mounted acceptance remain outstanding; these fixes do not prove the kernel wedge resolved.
 
-Commands below ran from `Packages/NTFSCore` unless a repository-root command is shown. `swift test --filter NAME` denotes the exact focused invocation, not a hypothetical check. Full plain suite: 17 probe/policy + 12 glue + 25 bridge tests passed; all fixture-entry comparisons retained.
+Commands below ran from `Packages/NTFSCore` unless a repository-root command is shown. `swift test --filter NAME` denotes the exact focused invocation, not a hypothetical check. Earlier wave counts are preserved with their evidence; the latest FR-1 matrix passed 17 probe/policy + 24 glue + 27 bridge tests, including every original fixture-entry comparison.
 
 ## Per finding
 
@@ -243,3 +243,130 @@ The earlier 16-test verification command was cancelled after this correction cha
 The complete sequential command is the four commands already specified above joined by `&&`: plain suite, ASan suite, explicitly linked UBSan suite, then `xcodegen generate && xcodebuild -scheme YuzuNTFS -configuration Debug build`. It exited 0 (artifact 543); each suite reported 17 probe/policy + 17 glue + 25 bridge tests. Bridge durations: initial plain 379.273 s, ASan 462.255 s, UBSan 446.466 s. Debug emitted `** BUILD SUCCEEDED **`; no ASan/UBSan runtime error was reported. The last ordinary-growth-versus-shrink discrimination correction landed before the ASan and UBSan builds; therefore a final plain run was also executed afterwards to cover that exact final source: `swift test --package-path Packages/NTFSCore`, exit 0, artifact 545, 17 + 17 + 25 tests, bridge 424.368 s. No production source changed after these final sanitizer/build phases.
 
 Final status remains **G1 INCOMPLETE** for the explicit uncovered paths in the table, not a complete no-hang guarantee. Namespace removal no longer depends on completion callbacks, and size growth is not rejected merely because a pending write extends farther; EBUSY applies only to an explicit overlapping tail during actual shrink.
+
+## Targeted re-review FR-1 / FR-2 — N1–N4 and T1–T3
+
+This section supersedes the earlier G1 acceptance statements: Main amended G1 to a **static complete-entrypoint reply audit**, rather than reinstating the previously requested exhaustive runtime matrix. `agent://FinalReReview` audited all Module entrypoints and found one reply on every ordinary/thrown-error return, subject to T1–T3's remaining trap sites. This round closes those sites. Runtime test gaps remain disclosed; they are not reclassified as exercised tests. FR-2 explicitly permits the existing ad-hoc Debug build phase; G2 prohibits mounted/attached/installed/notarized testing, all of which remain unattempted.
+
+### N1 — atomic EOF / shrink classification
+
+Files: `Module/YuzuNTFSItem.swift`, `Module/YuzuNTFSVolume.swift`, `HandlerTests.swift`.
+
+The setter now enters `changingSize`'s item I/O lock, then the volume serialization lock, before reading EOF. It classifies actual shrink, checks overlap against the current explicit-operation extents, applies the size and builds final attributes without releasing either lock. The stale pre-lock EOF snapshot and classification are removed. Namespace remove/rename remain outside mapping-lease exclusion.
+
+Regression: `concurrentGrowthCannotTurnOldGrowthSnapshotIntoUnsafeShrink`. A DEBUG-only scheduling hook interleaves request A (8 KiB → 12 KiB) with B's actual setter growing the injected bridge state to 16 KiB and an explicit [12 KiB,16 KiB) mapping model. A must return EBUSY, preserve 16 KiB and preserve the mapping's physical extent. This is a deterministic handler/bridge-double interleaving, not a kernel-issued mapping or physical-media test.
+
+- RED: `swift test --filter concurrentGrowthCannotTurnOldGrowthSnapshotIntoUnsafeShrink`, artifact 557: reply error nil rather than EBUSY; final size 12288 rather than 16384; two issues.
+- GREEN: `swift test --filter 'concurrentGrowthCannotTurnOldGrowthSnapshotIntoUnsafeShrink|namespaceRemovalDoesNotWaitForExplicitMapping'`, artifact 559: two tests passed.
+
+### N2 — startup signals and authorization ownership
+
+Files: `scripts/bench_supervisor.py`, `scripts/bench.sh`, `scripts/test-bench.py`.
+
+SIGINT/SIGTERM are blocked before installing handlers/forking. The whole parent post-fork lifetime is within cleanup scope. The child establishes its process group and waits on a go-pipe before doing any work; EOF exits without proceeding. The parent unmasks pending startup signals inside its protected try, grants authorization itself, then releases the child. `bench.sh` no longer grants authorization after returning into the worker. Thus a surviving child cannot reauthorize after parent revocation. Every catchable parent exit revokes before attempting SIGTERM, without a blocking reap or force cleanup. Cleanup is also protected against pipe-close errors and the close/descriptor-state signal window.
+
+Regression: `BenchPreflight.test_termination_during_parent_setup_never_releases_worker` injects SIGTERM during the parent's `setpgid` setup, before the old supervising try. A child which incorrectly escapes release writes a reauthorization marker.
+
+- RED: repository-root `python3 scripts/test-bench.py BenchPreflight.test_termination_during_parent_setup_never_releases_worker`: return code 1 rather than 143.
+- GREEN: repository-root `python3 scripts/test-bench.py`: four tests OK, including the startup signal, normal deadline, image/driver preflight mismatch and mounted-identity subprocess doubles. No disk commands run.
+- A later combined verification attempt exposed `PermissionError: [Errno 1] Operation not permitted` delivering SIGTERM to the owned group after startup cancellation. The supervisor now explicitly reports failed delivery and surviving PID/group, preserves its failure exit status, and does not attempt escalation, an unbounded reap or forced cleanup. Authorization is already revoked and unreleased startup workers cannot pass their go-pipe. This diagnostic is not described as successful signal delivery.
+
+### N3 — buffered gap growth stays non-sparse
+
+Files: `engine.c`, BridgeConformanceTests.
+
+Before a nonempty buffered write extends beyond physical allocation, E2 promotes as necessary and calls the existing non-sparse preallocation primitive through `e2_prepare`, keeping EOF/VDL unchanged. TT's subsequent buffered writer still owns EOF/VDL and gap-zero bookkeeping, but cannot create sparse gap runs in the now-allocated range. Initially sparse files still return EPERM under F-R1.
+
+Regression `bufferedGapGrowthStaysWritableAndNonSparse`: write at 1 MiB, assert no sparse flag, assert a second write succeeds, then compare the entire zero gap plus payload.
+
+- RED: `swift test --filter 'bufferedGapGrowthStaysWritableAndNonSparse|sizeOnlyGrowthUpdatesModificationAndChangeTimes'`, artifact 551: sparse flag 8; second write EPERM; incorrect resulting bytes.
+- GREEN: same command, artifact 553: both tests passed (0.017 s combined).
+
+### N4 — growth timestamp / dirty bookkeeping
+
+Files: `internal.c`, BridgeConformanceTests.
+
+Successful low-level growth updates mtime/ctime, marks filename metadata dirty and marks the inode dirty, retaining F-R2's physical-allocation and unchanged-VDL semantics. Explicit timestamp attributes are still applied after size.
+
+Regression `sizeOnlyGrowthUpdatesModificationAndChangeTimes`: grow a real image's nonresident file, then require both times to advance.
+
+- RED: combined command above, artifact 551: mtime and ctime both remained exactly 134372544883158690.
+- GREEN: same command, artifact 553: both tests passed.
+
+### T1 — NSError narrowing
+
+Files: `YuzuNTFSItem.swift` (shared boundary helpers), `YuzuNTFSDevice.swift`, `YuzuNTFSVolume.swift`.
+
+All device error translations and completion-status translation use `Int32(exactly:)`, mapping an unrepresentable NSError code to EIO. This is nonthrowing and cannot terminate a reply path.
+
+Regression `completionMapsUnrepresentableErrorCodeToEIO` drives the real completion handler with NSError code Int.max and verifies the bridge receives EIO and the reply runs once.
+
+- RED: `swift test --filter completionMapsUnrepresentableErrorCodeToEIO`, artifact 561: `Fatal error: Not enough bits to represent the passed value`.
+- GREEN: four-test boundary command in artifact 566: passed.
+
+### T2 — geometry validation before allocation/narrowing
+
+Files: `YuzuNTFSItem.swift`, `YuzuNTFSDevice.swift`, `YuzuNTFSFileSystem.swift`, the new filesystem-source symlink in FSKitGlue, `HandlerTests.swift`.
+
+`YuzuNTFSGeometry` checks exact Int/UInt32 conversions, supported logical sectors (512/4096), nonzero count, bounded power-of-two physical sector, multiplication overflow and the signed device-offset range. Scratch allocation and bridge descriptors use validated stored geometry. Probe/load validate before allocation and catch EINVAL/EOVERFLOW; read lengths are checked before constructing raw buffers. Device construction and the resource-based volume initializer now throw; the load handler catches them.
+
+- RED `swift test --filter unrepresentableDeviceGeometryIsAnErrorNotATrap`, artifact 564: the actual device constructor trapped converting UInt64.max blockSize to Int.
+- GREEN boundary command, artifact 566: passed.
+- `geometryOverflowRepliesFromFilesystemHandlers` drives actual probe/load handlers on an in-memory FSBlockDeviceResource subclass with oversized geometry, asserting exactly one EOVERFLOW reply without any resource I/O. `invalidGeometryProductsAndPhysicalRangesAreChecked` covers overflowing count products, invalid/zero geometry, unrepresentable physical sizes and arithmetic helpers. Both passed in artifact 570.
+- FSKitGlue now compiles the actual `YuzuNTFSFileSystem.swift` through the same source-symlink convention as the volume/device/item sources.
+
+### T3 — checked producer-boundary arithmetic
+
+Files: `YuzuNTFSItem.swift`, `YuzuNTFSVolume.swift`, `YuzuNTFSDevice.swift`, `HandlerTests.swift`.
+
+Reference translation and enumeration cookies use checked UInt64 addition. Attribute construction can throw through its callers. Directory callback errors are stored on the synchronous enumeration context, stop enumeration and reach the single outer error reply. Full logical/physical mapping ranges and each signed offset conversion are checked before packing. Purge computes checked physical endpoints rather than overflowing Int64/UInt64 additions.
+
+- RED `swift test --filter overflowingReferenceRepliesWithErrorRatherThanTrapping`: process exited with unexpected signal 5 before replying.
+- GREEN boundary command, artifact 566: reference overflow replied EOVERFLOW once.
+- `overflowingBridgeCookieAndPhysicalRangeReplyOnce` injects UInt64.max enumeration cookies and physical mappings into real handlers. Both reply EOVERFLOW once before using the SDK packer. It passed with the namespace/broad-handler regressions in the focused command preceding the full matrix.
+
+### Updated static reply-once audit rows
+
+The complete unchanged entrypoint inventory and normal/thrown return-path trace is in `agent://FinalReReview`'s Reply-once audit. The following rows supersede its T1–T3 qualifications and N1 race finding:
+
+| Entrypoint / shared path | Final returning-path result | Runtime evidence / qualification |
+|---|---|---|
+| probeResource | Non-block guard, geometry error, read/format error and usable result each reply once; allocation is bounded by validated geometry | Actual invalid-geometry handler regression; valid-resource I/O remains a device-progress dependency |
+| loadResource | Invalid resource/geometry/read/parse/throwing device construction all converge on one error reply; valid construction replies one volume | Actual oversized-geometry load regression; no mounted load |
+| getAttributes and attribute-producing setters | Reference-ID overflow throws EOVERFLOW to the existing single catch/reply | Actual UInt64.max ref regression |
+| setAttributes | EOF query, shrink classification, overlap guard and mutation occur under item+volume locks; every thrown branch unwinds both locks before the one error reply | Deterministic A/B size interleaving; existing namespace/shrink regressions |
+| enumerateDirectory | Dot-entry ID errors throw to outer catch; entry callback ID/cookie/attribute errors stop via context.error, then outer catch replies once | Actual overflow-cookie callback regression; normal SDK packer-full branches retain the prior static trace |
+| blockmapFile | Caller range/item guards reply-and-return; map/purge/range/offset errors release the matching explicit lease and unlock before replying once; packer-stop reaches one success reply | Actual physical overflow regression; no unchecked physical offset narrowing remains |
+| completeIO | Unrepresentable NSError status maps to EIO before C; tracked/cached map/purge/bridge errors still converge on one catch; matching lease is cleared by defer | Actual Int.max status regression; original completion-order tests retained |
+| device read/write/flush callbacks | Geometry is validated at construction; range validation precedes narrowing; NSError translation cannot trap | Constructor and shared-boundary regressions; callbacks can still wait for actual device progress |
+| all remaining implemented FSKit handlers / synchronous properties | Original FinalReReview return-path audit unchanged: one reply on every returning handler path, or a synchronous property with no reply closure | Earlier handler tests retained; no claim that every SDK-mediated branch was dynamically exercised |
+
+There is no introduced async dispatch or wait for a future completeIO callback. Ordinary mutex waits, synchronous device access, page-cache writeback and no-I/O disposal's drain of an already-running callback remain dependent on device/core progress. The static reply-once result is **not** an unconditional latency guarantee for wedged kernel/device I/O, and does not establish resolution of the original host wedge.
+
+### Final FR-1 verification and disposition
+
+Final-source command, repository root, executed sequentially:
+
+```sh
+python3 scripts/test-bench.py &&
+python3 scripts/test-seqio.py &&
+swift test --package-path Packages/NTFSCore &&
+swift test --package-path Packages/NTFSCore --sanitize=address &&
+env UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  swift test --package-path Packages/NTFSCore --sanitize=undefined \
+  -Xlinker /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib \
+  -Xlinker -rpath \
+  -Xlinker /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin &&
+xcodegen generate &&
+xcodebuild -scheme YuzuNTFS -configuration Debug build
+```
+
+Exit 0, artifact 579. Python: **4 benchmark + 2 seqio tests OK**. Each Swift matrix entry passed **17 probe/policy + 24 FSKit glue + 27 bridge tests (68 total)**. Bridge durations: plain **439.010 s**, ASan **413.657 s**, linked UBSan **396.656 s**. No ASan/UBSan runtime error reported. All original fixture/ntfscat comparisons remain included. Xcode output: `** BUILD SUCCEEDED **`; the existing SDK completion-nullability warning remains disclosed. No production source changed after this verification started.
+
+Logical implementation commits for this targeted round:
+
+- `82b5a32` — fix(engine): preserve buffered growth allocation and resize timestamps
+- `c53c835` — fix(module): serialize shrink decisions and check FSKit numeric boundaries
+- `dc0bafd` — fix(scripts): fence worker startup and parent-only authorization
+
+**Items not fixed from the targeted list: none.** E8 remains waived/unreachable under F-R1. G1's static returning-path audit is addressed; exhaustive SDK-mediated runtime coverage was superseded by Main's FR-1 ruling, not fabricated as passing. Synchronous device/core progress, owner reboot/mounted/hardware acceptance and the previously documented P1 functionality/ordering limitations remain unchanged.
