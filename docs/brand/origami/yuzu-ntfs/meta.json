@@ -1,0 +1,38 @@
+{
+  "slug": "yuzu-ntfs",
+  "product": "Yuzu NTFS",
+  "role_vn": "Đọc/ghi ổ NTFS (Windows) trên Mac, tự mount, tự chuyển chỉ-đọc khi ổ không an toàn · macOS 26+",
+  "status": "proposed",
+  "option": "C",
+  "option_name_vn": "Ổ đĩa + khiên · nền đồi/mây",
+  "concept_vn": "Đọc ra ổ cứng ngay nhờ cổng cắm. Khiên coral nói đúng tính năng an toàn (tự chuyển chỉ-đọc). Ảnh xám vẫn rõ. Nền: đồi + mây đều hai bên, cân đối.",
+  "family": "icon-hero",
+  "approved_on": null,
+  "approved_by": null,
+  "source": {
+    "repo": "bluecoral-origami",
+    "round": "2026-10-24-yuzu-r3b",
+    "file": "out/2026-10-24-yuzu-r3b/raw/yuzu-ntfs-c-safe-drive-bg.png"
+  },
+  "prompt": "Square 1024x1024 app-icon artwork, full-bleed: no rounded corners, no border, no phone or device mockup (the operating system applies the icon mask later). Bright, airy, high-key studio photograph of ONE handcrafted origami object folded from matte washi-like paper: visible paper fibre, crisp creases, facets defined only by light and shade. A bold, simple, iconic object, not a diorama. No outlines, no gold, no gloss, no plastic, no cel shading, no CGI look, not a flat vector, not a line icon.\n\nBACKGROUND: light and cheerful, never dark, never a flat plain colour: a clearly coloured pastel paper backdrop (#B5CCFF) with a soft daylight gradient (lighter towards the upper-left), plus a SIMPLE paper landscape far behind the hero exactly in the spirit of the approved family icons: 2 gentle layered paper hills along the lower background and 1 or 2 large soft paper clouds higher up, all cut from paper in lighter and slightly deeper tints of the backdrop colour, softly out of focus, low contrast. Optionally one small pale yuzu-yellow paper sun disc near the upper-left corner. These background shapes give depth only: they stay behind the hero, never overlap its silhouette edges heavily, carry no saturated cobalt or coral, and never compete with the hero.\n\nCOMPOSITION: ONE single hero origami object that carries the product meaning, about 66-74% of the canvas width, centred with its optical centre slightly low, standing on the backdrop with one soft contact shadow. A bold, simple silhouette that is instantly recognisable at 16 px and in greyscale: few large clean paper planes, no fussy small folds. At most ONE small supporting element, no larger than 12% of the canvas, physically attached to or resting against the hero. Everything inside the central 86% safe zone, nothing cropped. No scattered props, no confetti, no clutter, no tiny specks.\n\nVIEW: three-quarter view, camera about 30 degrees above the table plane, the same viewpoint for every icon in this family (not a flat lay, not straight-on).\n\nHERO: a chunky cobalt folded paper portable external hard drive in three-quarter view\n\nSUPPORTING ELEMENT (optional, at most one): a pearl-white folded paper shield with a coral centre facet leaning against the front right side of the drive (data safety)\n\nFAMILY MARK: one small matte yuzu-yellow #FFC93C folded paper yuzu leaf resting on top of the drive; it is the only yellow element and stays small\n\nLIGHT: soft bright daylight from out of frame at the upper-left, high-key exposure, gentle soft shadows falling to the lower-right. Every icon of this family uses exactly this light.\n\nCOLOUR: Blue Coral origami palette: cobalt #2B4BFF, coral #FF5A4E, pearl white #F4F1EA, deep navy #0B1433 (tiny accents only), yuzu yellow #FFC93C, sky blue #8DB4FF. The hero uses 2 or 3 of these paper colours in large clear blocks, and at least one large block contrasts strongly with the backdrop #B5CCFF; the hero never uses the backdrop colour. Matte, joyful, eye-catching, not glossy.\n\nAttached image 1 defines ONLY the paper material and crease quality (matte washi fibre, cobalt/coral/white facets). IGNORE its dark room and dramatic beam: this family is bright and high-key. Do not copy its shape, room, props or composition.\n\nNEVER: text, letters, digits, currency signs, logos, brand marks (no Windows four-pane logo, no Apple logo, no USB symbol), UI, readable screens, watermark, people, hands, faces. Paper documents, notes and menu cards stay blank. Exception: a simple mathematical symbol shape such as '=' or '+' built from folded paper strips is allowed only when the HERO description explicitly asks for it.\n\nAdditional attached references define family/composition only; preserve the requested subject, camera and light. Do not copy text or logos.\n\nKEEP: Attached image 2 is this exact icon from the previous round: keep its HERO object (shape, folds, colours, size, position, supporting element and yuzu-yellow mark) as close as possible, but REPLACE its plain single-colour backdrop. Attached image 3 is an approved icon of this family: copy ONLY its background treatment (soft layered pastel paper hills low behind, large pale paper clouds higher up, gentle depth), never its fruit, document, arrow, leaves or any other object. Use the backdrop colour requested below, not the colour of image 3.\n\nAVOID: Round 1 was rejected as monotonous: never a dark or saturated flat background; the backdrop stays a light pastel. Round 3 with a plain single-colour backdrop was rejected by the owner: always include the soft paper hills and clouds behind. Round 2 is too busy at small sizes: no scattered foreground props around the hero, no confetti; the background landscape stays soft and simple. Gold-leaf edging from Careers v3 is DROPPED. No metallic gold, rims or drawn outlines. Matte yuzu yellow paper is allowed for icons only. No glossy plastic, CGI-toy sheen, cel shading, text, logos, readable UI, faces or hands. No top-down flat-lay or straight-on icon camera drift. Do not let bright sky, table, props or background outshine the origami.\n\nUse your image generation tool to create exactly ONE image. Save it into the current working directory as yuzu-ntfs-c-safe-drive-bg.png and print its absolute path. Do not create any other files and do not post-process the image with code.",
+  "created": "2026-10-24",
+  "backdrop_hex": "#B5CCFF",
+  "platforms_target": [
+    "macos"
+  ],
+  "options": [
+    {
+      "slug": "yuzu-ntfs-a-yuzu-core-drive-bg",
+      "name_vn": "Yuzu NTFS A · Ổ đĩa lõi yuzu · nền đồi/mây",
+      "caveat_vn": "Dễ đọc thành hộp bánh hoặc hộp trang sức hơn là ổ cứng. Nắp và dây cáp sát mép trên và mép phải, vượt vùng an toàn 86%."
+    },
+    {
+      "slug": "yuzu-ntfs-b-two-way-drive-bg",
+      "name_vn": "Yuzu NTFS B · Ổ đĩa hai chiều · nền đồi/mây",
+      "caveat_vn": "Phần ổ đĩa trông như khay hoặc hộp giấy. Hero rất rộng (~89% khung), sát mép trái và phải. Ý \"chuyển dữ liệu\" khá chung."
+    }
+  ],
+  "master_sha256": "7f1e4db41ed5b9480532a6aebe46e6f949066b983cb8252ce9929f6badaa53a2",
+  "rules_file": "RULES.md",
+  "style_lock": "style.lock.json"
+}

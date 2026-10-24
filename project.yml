@@ -52,6 +52,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bluecoral.vn.yuzuntfs
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         Release-Direct:
           PRODUCT_NAME: Yuzu NTFS

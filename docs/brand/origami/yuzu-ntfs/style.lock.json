@@ -1,0 +1,86 @@
+{
+  "library_version": "self-contained-v1",
+  "library_commit": "a85ed4ba576477582bf514a6c35599f5457e0e09",
+  "family": "icon-hero",
+  "palette": {
+    "colours": {
+      "cobalt": {
+        "hex": "#2B4BFF",
+        "role": "primary saturated origami hero"
+      },
+      "coral": {
+        "hex": "#FF5A4E",
+        "role": "warm origami counterpoint"
+      },
+      "pearl": {
+        "hex": "#F4F1EA",
+        "role": "paper and light scene neutrals"
+      },
+      "navy": {
+        "hex": "#0B1433",
+        "role": "dark scene environment; tiny icon accents only"
+      },
+      "yuzu": {
+        "hex": "#FFC93C",
+        "role": "matte yellow icon accent; never metallic gold"
+      },
+      "sky": {
+        "hex": "#8DB4FF",
+        "role": "secondary icon paper accent"
+      }
+    },
+    "icon_backgrounds": {
+      "hub": {
+        "hex": "#E3EDFF",
+        "role": "pastel paper backdrop only; hero must contrast and not repeat this background colour"
+      },
+      "so": {
+        "hex": "#FFE5DC",
+        "role": "pastel paper backdrop only; hero must contrast and not repeat this background colour"
+      },
+      "yuzu": {
+        "hex": "#E7E8FF",
+        "role": "pastel paper backdrop only; hero must contrast and not repeat this background colour"
+      },
+      "photo": {
+        "hex": "#FFF2CF",
+        "role": "pastel paper backdrop only; hero must contrast and not repeat this background colour"
+      },
+      "scanner": {
+        "hex": "#F4F1EA",
+        "role": "pastel paper backdrop only; hero must contrast and not repeat this background colour"
+      }
+    }
+  },
+  "prompt_blocks": {
+    "STYLE": "Square 1024x1024 app-icon artwork, full-bleed: no rounded corners, no border, no phone or device mockup (the operating system applies the icon mask later). Bright, airy, high-key studio photograph of ONE handcrafted origami object folded from matte washi-like paper: visible paper fibre, crisp creases, facets defined only by light and shade. A bold, simple, iconic object, not a diorama. No outlines, no gold, no gloss, no plastic, no cel shading, no CGI look, not a flat vector, not a line icon.",
+    "BACKGROUND": "BACKGROUND: light and cheerful, never dark, never a flat plain colour: a clearly coloured pastel paper backdrop ({bg}) with a soft daylight gradient (lighter towards the upper-left), plus a SIMPLE paper landscape far behind the hero exactly in the spirit of the approved family icons: 2 gentle layered paper hills along the lower background and 1 or 2 large soft paper clouds higher up, all cut from paper in lighter and slightly deeper tints of the backdrop colour, softly out of focus, low contrast. Optionally one small pale yuzu-yellow paper sun disc near the upper-left corner. These background shapes give depth only: they stay behind the hero, never overlap its silhouette edges heavily, carry no saturated cobalt or coral, and never compete with the hero.",
+    "COMPOSITION": "COMPOSITION: ONE single hero origami object that carries the product meaning, about 66-74% of the canvas width, centred with its optical centre slightly low, standing on the backdrop with one soft contact shadow. A bold, simple silhouette that is instantly recognisable at 16 px and in greyscale: few large clean paper planes, no fussy small folds. At most ONE small supporting element, no larger than 12% of the canvas, physically attached to or resting against the hero. Everything inside the central 86% safe zone, nothing cropped. No scattered props, no confetti, no clutter, no tiny specks.",
+    "VIEW": "VIEW: three-quarter view, camera about 30 degrees above the table plane, the same viewpoint for every icon in this family (not a flat lay, not straight-on).",
+    "LIGHT": "LIGHT: soft bright daylight from out of frame at the upper-left, high-key exposure, gentle soft shadows falling to the lower-right. Every icon of this family uses exactly this light.",
+    "COLOUR": "COLOUR: Blue Coral origami palette: cobalt #2B4BFF, coral #FF5A4E, pearl white #F4F1EA, deep navy #0B1433 (tiny accents only), yuzu yellow #FFC93C, sky blue #8DB4FF. The hero uses 2 or 3 of these paper colours in large clear blocks, and at least one large block contrasts strongly with the backdrop {bg}; the hero never uses the backdrop colour. Matte, joyful, eye-catching, not glossy.",
+    "REF": "Attached image 1 defines ONLY the paper material and crease quality (matte washi fibre, cobalt/coral/white facets). IGNORE its dark room and dramatic beam: this family is bright and high-key. Do not copy its shape, room, props or composition.",
+    "NEVER": "NEVER: text, letters, digits, currency signs, logos, brand marks (no Windows four-pane logo, no Apple logo, no USB symbol), UI, readable screens, watermark, people, hands, faces. Paper documents, notes and menu cards stay blank. Exception: a simple mathematical symbol shape such as '=' or '+' built from folded paper strips is allowed only when the HERO description explicitly asks for it.",
+    "AVOID": "Round 1 was rejected as monotonous: never a dark or saturated flat background; the backdrop stays a light pastel. Round 3 with a plain single-colour backdrop was rejected by the owner: always include the soft paper hills and clouds behind. Round 2 is too busy at small sizes: no scattered foreground props around the hero, no confetti; the background landscape stays soft and simple."
+  },
+  "keep": [
+    "matte washi fibres and crisp light-defined facets from ai-banking",
+    "r2 icons: pale pastel, 3–5 supporting details, camera 30 degrees, at least four paper colours",
+    "scene: upper-left light, lower-right shadows, crop-safe hero"
+  ],
+  "avoid": [
+    "Round 1 was rejected as “đơn điệu”: one isolated object on a dark/saturated flat background. Do not return to this icon treatment.",
+    "Gold-leaf edging from Careers v3 is DROPPED. No metallic gold, rims or drawn outlines. Matte yuzu yellow paper is allowed for icons only.",
+    "No glossy plastic, CGI-toy sheen, cel shading, text, logos, readable UI, faces or hands.",
+    "No top-down flat-lay or straight-on icon camera drift.",
+    "Do not let bright sky, table, props or background outshine the origami.",
+    "At 29–40 px the supporting details can become noise; disclose this and offer a separately reviewed reduced hero-only derivative if needed.",
+    "Material changes need a NEW PHOTOGRAPH, NOT AN EDIT; conservative image edits tend to retain the old glossy material."
+  ],
+  "suffix": "Use your image generation tool to create exactly ONE image. Save it into the current working directory as {slug}.png and print its absolute path. Do not create any other files and do not post-process the image with code.",
+  "style_provenance": "bluecoral-origami/docs/briefs/2026-10-24-yuzu-family-r3.md; owner asked 2026-10-24 for simpler, more eye-catching iOS/macOS icons, then (r3b, same day) asked for the simple paper background details of the approved r2 icons instead of a plain colour (proposed recipe, not yet approved)",
+  "backdrop": "#B5CCFF",
+  "tone": null,
+  "prompt": "Square 1024x1024 app-icon artwork, full-bleed: no rounded corners, no border, no phone or device mockup (the operating system applies the icon mask later). Bright, airy, high-key studio photograph of ONE handcrafted origami object folded from matte washi-like paper: visible paper fibre, crisp creases, facets defined only by light and shade. A bold, simple, iconic object, not a diorama. No outlines, no gold, no gloss, no plastic, no cel shading, no CGI look, not a flat vector, not a line icon.\n\nBACKGROUND: light and cheerful, never dark, never a flat plain colour: a clearly coloured pastel paper backdrop (#B5CCFF) with a soft daylight gradient (lighter towards the upper-left), plus a SIMPLE paper landscape far behind the hero exactly in the spirit of the approved family icons: 2 gentle layered paper hills along the lower background and 1 or 2 large soft paper clouds higher up, all cut from paper in lighter and slightly deeper tints of the backdrop colour, softly out of focus, low contrast. Optionally one small pale yuzu-yellow paper sun disc near the upper-left corner. These background shapes give depth only: they stay behind the hero, never overlap its silhouette edges heavily, carry no saturated cobalt or coral, and never compete with the hero.\n\nCOMPOSITION: ONE single hero origami object that carries the product meaning, about 66-74% of the canvas width, centred with its optical centre slightly low, standing on the backdrop with one soft contact shadow. A bold, simple silhouette that is instantly recognisable at 16 px and in greyscale: few large clean paper planes, no fussy small folds. At most ONE small supporting element, no larger than 12% of the canvas, physically attached to or resting against the hero. Everything inside the central 86% safe zone, nothing cropped. No scattered props, no confetti, no clutter, no tiny specks.\n\nVIEW: three-quarter view, camera about 30 degrees above the table plane, the same viewpoint for every icon in this family (not a flat lay, not straight-on).\n\nHERO: a chunky cobalt folded paper portable external hard drive in three-quarter view\n\nSUPPORTING ELEMENT (optional, at most one): a pearl-white folded paper shield with a coral centre facet leaning against the front right side of the drive (data safety)\n\nFAMILY MARK: one small matte yuzu-yellow #FFC93C folded paper yuzu leaf resting on top of the drive; it is the only yellow element and stays small\n\nLIGHT: soft bright daylight from out of frame at the upper-left, high-key exposure, gentle soft shadows falling to the lower-right. Every icon of this family uses exactly this light.\n\nCOLOUR: Blue Coral origami palette: cobalt #2B4BFF, coral #FF5A4E, pearl white #F4F1EA, deep navy #0B1433 (tiny accents only), yuzu yellow #FFC93C, sky blue #8DB4FF. The hero uses 2 or 3 of these paper colours in large clear blocks, and at least one large block contrasts strongly with the backdrop #B5CCFF; the hero never uses the backdrop colour. Matte, joyful, eye-catching, not glossy.\n\nAttached image 1 defines ONLY the paper material and crease quality (matte washi fibre, cobalt/coral/white facets). IGNORE its dark room and dramatic beam: this family is bright and high-key. Do not copy its shape, room, props or composition.\n\nNEVER: text, letters, digits, currency signs, logos, brand marks (no Windows four-pane logo, no Apple logo, no USB symbol), UI, readable screens, watermark, people, hands, faces. Paper documents, notes and menu cards stay blank. Exception: a simple mathematical symbol shape such as '=' or '+' built from folded paper strips is allowed only when the HERO description explicitly asks for it.\n\nAdditional attached references define family/composition only; preserve the requested subject, camera and light. Do not copy text or logos.\n\nKEEP: Attached image 2 is this exact icon from the previous round: keep its HERO object (shape, folds, colours, size, position, supporting element and yuzu-yellow mark) as close as possible, but REPLACE its plain single-colour backdrop. Attached image 3 is an approved icon of this family: copy ONLY its background treatment (soft layered pastel paper hills low behind, large pale paper clouds higher up, gentle depth), never its fruit, document, arrow, leaves or any other object. Use the backdrop colour requested below, not the colour of image 3.\n\nAVOID: Round 1 was rejected as monotonous: never a dark or saturated flat background; the backdrop stays a light pastel. Round 3 with a plain single-colour backdrop was rejected by the owner: always include the soft paper hills and clouds behind. Round 2 is too busy at small sizes: no scattered foreground props around the hero, no confetti; the background landscape stays soft and simple. Gold-leaf edging from Careers v3 is DROPPED. No metallic gold, rims or drawn outlines. Matte yuzu yellow paper is allowed for icons only. No glossy plastic, CGI-toy sheen, cel shading, text, logos, readable UI, faces or hands. No top-down flat-lay or straight-on icon camera drift. Do not let bright sky, table, props or background outshine the origami.\n\nUse your image generation tool to create exactly ONE image. Save it into the current working directory as yuzu-ntfs-c-safe-drive-bg.png and print its absolute path. Do not create any other files and do not post-process the image with code.",
+  "master_sha256": "7f1e4db41ed5b9480532a6aebe46e6f949066b983cb8252ce9929f6badaa53a2"
+}
