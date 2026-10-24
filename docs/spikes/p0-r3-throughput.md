@@ -582,3 +582,39 @@ that is present must independently agree; absent fields cannot substitute for
 mount identity. Regression tests cover the observed missing-field shape plus
 wrong device/type, missing mount/RO flag, and contradictory diskutil RO metadata.
 All six Python suites pass 32 tests (5 + 16 + 4 + 1 + 4 + 2).
+
+### Final authorized live outcome: FAIL — nonresident RO read returned EBUSY
+
+After both dry-runs and the two reviewed harness corrections, the final live
+`scripts/p0-guest-acceptance.sh --allow-host-readonly` stopped on
+`OSError: [Errno 16] Resource busy` while hashing `nonresident.bin`. This was
+**not a timeout**. No further mount/read retries were made.
+
+| Check | Result and observed evidence |
+|---|---|
+| Fixture-only, fresh script attachment | PASS — copied `basic-512.img`, freshly derived `/dev/disk12`; no real disk used |
+| Our filesystem and RO mount | PASS — exact owned mount row below; diskutil agreed on device and mountpoint |
+| Resident manifest SHA-256 | PASS — `4b2720d37f921134bfbb2deb27137d6f08fc55ced90f88c4971f5f42e06e1fc6` |
+| Nonresident manifest SHA-256 | FAIL — read returned EBUSY before a complete hash; expected `e987c93a0a4837eaf02125d47e7ebf24dbe507cfc47a49c88e1f2f27492a9e8e` |
+| Names hashes / bigdir samples / bigdir `ls` count | NOT REACHED — stopped at the first failed fixture; no extra attachments attempted |
+| Serving-module callback evidence | PASS — installed `YuzuNTFSModule` PID 47328 emitted buffered read and read-only block mappings below |
+| Image unchanged | PASS — pristine source/before and detached result both `f1f66e80cc137d09aa3f409973a2fe56a9ab756f4e0c103a8286a9e7c02bef5b` |
+| Clean unmount + detach | PASS — supervised `umount` and `hdiutil detach` succeeded; final inventory found no owned attachment |
+| RW allowlist empty | PASS — 0 bytes before/after every attempt and at final audit; no RW authorization path invoked |
+| No state-U process afterwards | PASS — separately deadline-supervised final process inventory returned `[]` |
+| Prohibited operations | NONE — no RW test, bench, agent refresh, rebuild/reinstall or real-media operation |
+
+Exact mount evidence (the device number is historical evidence, never reusable):
+
+```text
+/dev/disk12 on /Users/rom/Projects/yuzu-ntfs-p0/build/p0-guest/26b7b675-ad7a-4d31-bf18-363e052d1f4f/basic-512-ro-mount (yuzuntfs, local, nodev, nosuid, read-only, noowners, noatime, fskit, mounted by rom)
+2026-10-25 01:23:28.633 YuzuNTFSModule[47328] P0KOIO bufferedRead offset=0 length=512
+2026-10-25 01:23:28.636 YuzuNTFSModule[47328] P0KOIO blockmapFile offset=0 length=1048576 write=false
+2026-10-25 01:23:28.637 YuzuNTFSModule[47328] P0KOIO blockmapFile offset=1048576 length=1048576 write=false
+```
+
+Durable local evidence: `build/p0-host-ro-final-run-20261025.log`,
+`build/p0-host-ro-final-run-audit-20261025.log`, and
+`build/p0-guest/26b7b675-ad7a-4d31-bf18-363e052d1f4f/basic-512-ro-callbacks.log`.
+The EBUSY cause is not established here; these read-only results do not close
+the RO acceptance gate, RW, KOIO completion, VM or throughput gates.
