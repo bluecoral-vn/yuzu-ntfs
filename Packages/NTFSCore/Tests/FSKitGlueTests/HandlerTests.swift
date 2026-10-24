@@ -137,6 +137,17 @@ private final class ReplyOnce {
     }
 }
 
+@Test func unalignedKernelExtentIsRejectedBeforePacking() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    core.flags = 0; core.mappingPhysical = 37
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    let item = YuzuNTFSItem(ref: 42, parent: 5)
+    let reply = ReplyOnce()
+    volume.blockmapFile(item, offset: 0, length: 512, flags: [], operationID: .unspecified,
+        packer: class_createInstance(FSExtentPacker.self, 0) as! FSExtentPacker, replyHandler: reply.accept)
+    reply.assertOnce(); #expect((reply.error as NSError?)?.code == Int(EINVAL))
+}
+
 @Test func p0ForceReadOnlyHookLatchesOnNextReadOperation() throws {
     let core = HandlerCore(), volume = try core.volume()
     let hook = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

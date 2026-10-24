@@ -383,8 +383,17 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     try device.purge(extents)
                     if operationID != .unspecified { item.extents.append(contentsOf: extents) }
                     for extent in extents {
-                        _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.logical, extent.length))
+                        let end = try YuzuNTFSBoundary.adding(extent.logical, extent.length)
+                        _ = try YuzuNTFSBoundary.offset(end)
                         _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, extent.length))
+                        let sector = UInt64(device.blockdev.sector_size)
+                        guard sector > 0, extent.logical % sector == 0,
+                              extent.kind == NB_EXT_HOLE || extent.physical % sector == 0 else { throw POSIXError(.EINVAL) }
+                        if end % sector != 0 {
+                            var attr = nb_attr()
+                            try check(api.nb_getattr!(core, item.ref, item.parent, &attr))
+                            guard end == attr.size || (flags.contains(.write) && end > attr.size) else { throw POSIXError(.EINVAL) }
+                        }
                         var done: UInt64 = 0
                         while done < extent.length {
                             let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
