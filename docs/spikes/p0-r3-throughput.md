@@ -756,3 +756,47 @@ Resident hash, nonresident hash, names hashes, bigdir hashes/count, callback
 evidence and image-unchanged checks were all **NOT RUN**. Disable/enable rollback
 was not reached. The allowlist was not changed; no RW, benchmark, real-media
 operation, daemon kill, subsequent build or push was performed.
+
+### Authorized Q-R3 continuation
+
+Controller authorized implementing Q-R3 and resuming from preflight with the
+already-notarized candidate, without rebuilding. Commit `68d001b`
+(`fix(ops): prune own DerivedData builds (Q-R3)`) permits only the exact
+`DerivedData/YuzuNTFS-*/Build/Products/*/{YuzuNTFS,Yuzu NTFS}.app` layout,
+with bundle identity verification and no symlink escape. Every validated bundle
+is unregistered, archived/verified, then only its `.app` is removed. The four
+installer tests passed, including own unregistered DerivedData isolation and
+refusal of another project's DerivedData. An initial test exposed macOS `/var`
+parent canonicalization; that predicate was corrected before live execution.
+
+Resumed preflight and installation both passed. The historical DerivedData app
+and staging app were archived and removed; unrelated DerivedData directories were
+not removed. Installed executable identity/hash, strict signing and Gatekeeper
+passed. Exactly one plugin remained at `/Applications/Yuzu NTFS.app`, UUID
+`1EF2587D-D171-470B-9CC6-964700A9A2E7`. The existing team-signed probe reported:
+
+```text
+com.bluecoral.vn.yuzuntfs.fsmodule enabled=true url=/Applications/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex
+```
+
+Settings backup:
+`enabledModules.plist.yuzu-1792870143451919000.backup` in the existing FSKit
+group-container directory. Only current-user `fskit_agent` PID 89237 was refreshed.
+DeviceFS was absent from mount inventories before refresh and during acceptance;
+its registered module remained visible in the probe. No DeviceFS mount was affected.
+
+The single authorized RO invocation exited 1, without timeout or retry, before
+any file read. Fresh owned fixture attachment `/dev/disk14` mounted at
+`build/p0-guest/ade18435-844e-4134-a18f-52874b22771d/basic-512-ro-mount`;
+`mount` identified `yuzuntfs` with `read-only,fskit`, but `diskutil` reported
+`FilesystemType=ntfs` and `WritableVolume=false`. The harness stopped at
+`RuntimeError: Conflicting diskutil mount field: FilesystemType`.
+Supervised unmount and detach both succeeded (`"disk14" ejected`).
+Resident/nonresident hashes, names, bigdir hashes/count and image-unchanged checks
+were **NOT REACHED**; no pass is inferred from the successful mount. Allowlist
+checks passed empty and no authorization was added. No RW or bench ran.
+
+Evidence: `build/p0-reinstall-qr3-preflight-20261025.log`,
+`build/p0-reinstall-qr3-20261025.log`, and
+`build/p0-host-ro-qr3-20261025.log`. No app/probe rebuild, subsequent mount attempt
+or push was performed.
