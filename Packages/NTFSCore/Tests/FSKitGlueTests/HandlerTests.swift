@@ -148,7 +148,7 @@ private final class ReplyOnce {
     reply.assertOnce(); #expect((reply.error as NSError?)?.code == Int(EINVAL))
 }
 
-@Test func p0ForceReadOnlyHookLatchesOnNextReadOperation() throws {
+@Test(arguments: [false, true]) func p0ForceReadOnlyHookLatchesOnNextReadOperation(closeFirst: Bool) throws {
     let core = HandlerCore(), volume = try core.volume()
     let hook = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     volume.forceReadOnlyURL = hook
@@ -157,7 +157,11 @@ private final class ReplyOnce {
     let item = YuzuNTFSItem(ref: 42, parent: 5)
     volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in #expect(error == nil) }
     try Data().write(to: hook)
-    volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in #expect(error == nil) }
+    if closeFirst {
+        volume.closeItem(item, modes: [.read]) { error in #expect(error == nil) }
+    } else {
+        volume.getAttributes(FSItem.GetAttributesRequest(), of: item) { _, error in #expect(error == nil) }
+    }
     try FileManager.default.removeItem(at: hook)
     let write = ReplyOnce()
     volume.write(contents: Data([1]), to: item, at: 0) { _, error in write.accept(error) }

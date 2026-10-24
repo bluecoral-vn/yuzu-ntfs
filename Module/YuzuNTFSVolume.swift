@@ -162,7 +162,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     func closeItem(_ item: FSItem, modes: FSVolume.OpenModes, replyHandler reply: @escaping ((any Error)?) -> Void) {
         // The bridge owns no per-open handle; FSKit owns cached data and close.
-        do { _ = try node(item); reply(nil) } catch { reply(error) }
+        do { try serial { _ = try node(item) }; reply(nil) } catch { reply(error) }
     }
     var maximumLinkCount: Int { 65535 }
     var maximumNameLength: Int { 255 }
@@ -371,7 +371,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         do {
             if operationID != .unspecified { item.operation = operationID }
             try serial {
-                if !effectivelyWritable() {
+                if !effectivelyWritable() && (flags.contains(.write) || length > 0) {
                     if flags.contains(.write) { throw POSIXError(.EROFS) }
                     var attr = nb_attr()
                     try check(api.nb_getattr!(core, item.ref, item.parent, &attr))
