@@ -359,6 +359,15 @@ int nb_e2_write(nb_volume *v, uint64_t ref, uint64_t off, const void *buf, size_
     ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
     if (e2_reserved(inode) || e2_sparse(inode)) { ntfs_inode_put(inode); return EPERM; }
+    if (len) {
+        struct ntfs_attr attr;
+        rc = positive(ntfs_getattr(inode, &attr));
+        if (!rc && off + len > attr.alloc_size) {
+            rc = e2_promote(inode);
+            if (!rc) rc = e2_prepare(inode, off, len, 0);
+        }
+        if (rc) { ntfs_inode_put(inode); return rc; }
+    }
     size_t done = 0;
     while (done < len) {
         ssize_t n = ntfs_write(inode, (const char *)buf + done, len - done, off + done);

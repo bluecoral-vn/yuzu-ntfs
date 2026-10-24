@@ -167,6 +167,31 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
+    @Test func bufferedGapGrowthStaysWritableAndNonSparse() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("buffered-gap.bin".utf16)
+        var a = nb_attr()
+        try #require(m.api.nb_create!(m.volume, 5, name, name.count, NB_FILE, &a) == 0)
+        var byte: UInt8 = 0x6a
+        try #require(m.api.nb_write!(m.volume, a.ref, 1 << 20, &byte, 1) == 0)
+        try #require(m.api.nb_getattr!(m.volume, a.ref, 5, &a) == 0)
+        #expect(a.flags & UInt32(NB_SPARSE) == 0)
+        #expect(m.api.nb_write!(m.volume, a.ref, (1 << 20) + 1, &byte, 1) == 0)
+        var expected = Data(count: (1 << 20) + 2)
+        expected[1 << 20] = byte; expected[(1 << 20) + 1] = byte
+        try #require(m.api.nb_getattr!(m.volume, a.ref, 5, &a) == 0)
+        #expect(try m.read(a) == expected)
+    }
+    @Test func sizeOnlyGrowthUpdatesModificationAndChangeTimes() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let before = try m.lookup("/nonresident.bin")
+        usleep(2000)
+        try #require(m.api.nb_truncate!(m.volume, before.ref, before.size + 4096) == 0)
+        var after = nb_attr()
+        try #require(m.api.nb_getattr!(m.volume, before.ref, 5, &after) == 0)
+        #expect(after.mtime > before.mtime)
+        #expect(after.ctime > before.ctime)
+    }
     @Test func disposePerformsNoDeviceWrites() throws {
         let m = try Mounted(.e2, "basic-512", write: true)
         let a = try m.lookup("/nonresident.bin")

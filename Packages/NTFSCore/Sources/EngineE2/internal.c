@@ -129,7 +129,12 @@ int e2_resize(ntfs_inode_t *h, uint64_t size)
     if (!err) {
         mutex_lock(&ni->mrec_lock);
         err = e2_grow_non_sparse(ni, size);
-        if (!err) i_size_write(vi, size);
+        if (!err) {
+            i_size_write(vi, size);
+            inode_set_mtime_to_ts(vi, inode_set_ctime_current(vi));
+            NInoSetFileNameDirty(ni);
+            mark_inode_dirty(vi);
+        }
         mutex_unlock(&ni->mrec_lock);
     }
     inode_unlock(vi);
