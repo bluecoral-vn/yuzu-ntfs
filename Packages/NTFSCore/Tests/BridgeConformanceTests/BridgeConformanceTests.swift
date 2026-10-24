@@ -167,6 +167,111 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
+    @Test func disposePerformsNoDeviceWrites() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let a = try m.lookup("/nonresident.bin")
+        var byte: UInt8 = 1
+        try #require(m.api.nb_write!(m.volume, a.ref, 0, &byte, 1) == 0)
+        let before = m.image.io.writeCount
+        _ = m.api.nb_dispose!(m.volume); m.volume = nil
+        #expect(m.image.io.writeCount == before)
+    }
+    @Test func freeSpaceInitializationFailureTerminatesMount() throws {
+        let image = try Image("basic-512", copy: true)
+        var volume: OpaquePointer?
+        let api = try Engine.e2.api()
+        let start = Date()
+        let result = nb_e2_test_mount(&image.dev, 1, UInt32(NB_E2_FAIL_FREE_INIT), &volume)
+        defer { if let volume { _ = api.nb_unmount!(volume) } }
+        #expect(result == ENOMEM)
+        #expect(volume == nil)
+        #expect(Date().timeIntervalSince(start) < 5)
+    }
+    @Test func failedCreatePromotionRollsBackNamespace() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("promotion-failure.bin".utf16)
+        var a = nb_attr()
+        try #require(nb_e2_test_fault(m.volume, UInt32(NB_E2_FAIL_PROMOTION)) == 0)
+        #expect(m.api.nb_create!(m.volume, 5, name, name.count, NB_FILE, &a) == ENOMEM)
+        #expect(m.api.nb_lookup!(m.volume, 5, name, name.count, &a) == ENOENT)
+    }
+    @Test func failedMappingAllocationNeverPublishesEOF() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("allocation-failure.bin".utf16)
+        var a = nb_attr()
+        try #require(m.api.nb_create!(m.volume, 5, name, name.count, NB_FILE, &a) == 0)
+        try #require(nb_e2_test_fault(m.volume, UInt32(NB_E2_FAIL_AFTER_ALLOCATION)) == 0)
+        var extent = nb_extent(), count = 0
+        #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, 65536, 1, &extent, 1, &count) == ENOMEM)
+        #expect(count == 0)
+        try #require(m.api.nb_getattr!(m.volume, a.ref, 5, &a) == 0)
+        #expect(a.size == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        #expect(try m.lookup("/allocation-failure.bin").size == 0)
+    }
+    @Test func ordinaryGrowthKeepsNonSparseAllocationAndSupportsLaterKOIO() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("ordinary-growth.bin".utf16)
+        var a = nb_attr()
+        try #require(m.api.nb_create!(m.volume, 5, name, name.count, NB_FILE, &a) == 0)
+        try #require(m.api.nb_truncate!(m.volume, a.ref, 65536) == 0)
+        try #require(m.api.nb_getattr!(m.volume, a.ref, 5, &a) == 0)
+        #expect(a.flags & UInt32(NB_SPARSE) == 0)
+        #expect(a.alloc_size >= a.size)
+        #expect(try m.read(a) == Data(count: 65536))
+        var extent = nb_extent(), count = 0
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, 4096, 512, 1, &extent, 1, &count) == 0)
+        let payload = Data(repeating: 0xa6, count: 512)
+        try #require(payload.withUnsafeBytes { pwrite(m.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
+        try #require(m.api.nb_complete_io!(m.volume, a.ref, 4096, 512, 0, 1) == 0)
+        try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
+        try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
+        var expected = Data(count: 65536); expected.replaceSubrange(4096..<4608, with: payload)
+        #expect(try m.read(m.lookup("/ordinary-growth.bin")) == expected)
+    }
+    @Test func failedRawWriteInvalidatesCachedPrefixWithoutChangingSize() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let a = try m.lookup("/nonresident.bin")
+        var cached = [UInt8](repeating: 0, count: 13), got = 0
+        try #require(m.api.nb_read!(m.volume, a.ref, 1, &cached, cached.count, &got) == 0)
+        var extents = [nb_extent](repeating: nb_extent(), count: 4), count = 0
+        try #require(m.api.nb_blockmap!(m.volume, a.ref, 0, 4096, 1, &extents, 4, &count) == 0)
+        let payload = [UInt8](repeating: 0xa7, count: 512)
+        try #require(pwrite(m.image.fd, payload, payload.count, off_t(extents[0].physical)) == payload.count)
+        #expect(m.api.nb_complete_io!(m.volume, a.ref, 0, 4096, EIO, 1) == EIO)
+        try #require(m.api.nb_read!(m.volume, a.ref, 1, &cached, cached.count, &got) == 0)
+        #expect(cached == [UInt8](repeating: 0xa7, count: 13))
+        var current = nb_attr()
+        try #require(m.api.nb_getattr!(m.volume, a.ref, 5, &current) == 0)
+        #expect(current.size == a.size)
+    }
+    @Test func streamPublicationLifetimeAndAttributes() throws {
+        let m = try Mounted(.e2, "basic-512")
+        let a = try m.lookup("/ads.txt:metadata")
+        #expect(m.api.nb_hold!(m.volume, a.ref) == 0)
+        var current = nb_attr()
+        #expect(m.api.nb_getattr!(m.volume, a.ref, 5, &current) == 0)
+        #expect(current.ref == a.ref)
+        #expect(current.size == 71)
+        #expect(current.flags & UInt32(NB_READ_ONLY) != 0)
+        #expect(try m.read(a).count == 71)
+        #expect(m.api.nb_release!(m.volume, a.ref) == 0)
+    }
+    @Test func reservedMetadataCannotBeMutated() throws {
+        let m = try Mounted(.e2, "basic-512", write: true)
+        let a = try m.lookup("/$Bitmap")
+        let before = m.image.io.writeCount
+        var extents = [nb_extent](repeating: nb_extent(), count: 4), count = 0
+        let byte: [UInt8] = [0x55]
+        #expect(m.api.nb_write!(m.volume, a.ref, 0, byte, 1) == EPERM)
+        #expect(m.api.nb_truncate!(m.volume, a.ref, 0) == EPERM)
+        #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, 512, 1, &extents, 4, &count) == EPERM)
+        #expect(m.api.nb_complete_io!(m.volume, a.ref, 0, 512, 0, 1) == EPERM)
+        var attrs = nb_attr()
+        #expect(m.api.nb_setattr!(m.volume, a.ref, &attrs, UInt32(NB_SET_MTIME)) == EPERM)
+        #expect(m.image.io.writeCount == before)
+    }
     @Test(arguments: Engine.allCases) func newFilesAndShrunkFilesAcceptKOIOWrites(engine: Engine) throws {
         let m = try Mounted(engine, "basic-512", write: true)
         let root = m.api.nb_root_ref!(m.volume), name = Array("koio-new".utf16)
@@ -472,97 +577,31 @@ struct BridgeConformanceTests {
         #expect(got == 0)
         #expect(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64.max, &byte, 0) == EFBIG)
     }
-    private func poisonFreeClusters(_ mounted: Mounted) throws -> Int {
-        let bitmap = try mounted.read(mounted.lookup("/$Bitmap"))
-        var boot = [UInt8](repeating: 0, count: 512)
-        try #require(pread(mounted.image.fd, &boot, boot.count, 0) == boot.count)
-        let sector = Int(boot[11]) | Int(boot[12]) << 8
-        let cluster = sector * Int(boot[13])
-        let poison = Data(repeating: 0xcc, count: cluster)
-        let clusters = Int(mounted.image.dev.size) / cluster
-        for index in 0..<min(clusters, bitmap.count * 8) where bitmap[index / 8] & (1 << (index % 8)) == 0 {
-            try #require(poison.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(index * cluster)) } == cluster)
-        }
-        return cluster
-    }
 
-    @Test(arguments: Engine.allCases) func failedSparseInitializationRestoresHole(engine: Engine) throws {
+    @Test(arguments: Engine.allCases) func sparseMutationsAreRejectedWithoutDeviceWrites(engine: Engine) throws {
         let mounted = try Mounted(engine, "basic-512", write: true)
-        let name = Array("rollback.bin".utf16)
+        let name = Array("sparse-policy.bin".utf16)
         var attr = nb_attr()
-        try #require(name.withUnsafeBufferPointer { mounted.api.nb_create!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, NB_FILE, &attr) } == 0)
-        let fileSize = 65536
-        try #require(mounted.api.nb_truncate!(mounted.volume, attr.ref, UInt64(fileSize)) == 0)
+        try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+        try #require(nb_e2_test_sparse_fixture(mounted.volume, attr.ref, 65536) == 0)
         var marker: UInt8 = 0x7c
-        try #require(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64(fileSize - 1), &marker, 1) == 0)
+        try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
+        try #require(attr.flags & UInt32(NB_SPARSE) != 0)
         try #require(mounted.api.nb_sync!(mounted.volume) == 0)
-        let cluster = try poisonFreeClusters(mounted)
-        let offset = cluster + 17
-        let payload = Data(repeating: 0x6a, count: 23)
-        var extent = nb_extent()
-        var count = 0
-        mounted.image.io.failNextWrite = true
-        #expect(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == EIO)
-        try #require(!mounted.image.io.failNextWrite, "The bridge's zero-fill write must consume the injected failure")
-        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(cluster), UInt64(cluster), 0, &extent, 1, &count) == 0)
-        try #require(count == 1)
-        #expect(extent.kind == NB_EXT_HOLE)
-        var expected = Data(count: fileSize)
-        expected[fileSize - 1] = marker
-        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
-        try #require(mounted.api.nb_sync!(mounted.volume) == 0)
-        try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
-        mounted.volume = nil
-        try #require(mounted.api.nb_mount!(&mounted.image.dev, 1, &mounted.volume) == 0)
-        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
-        #expect(try tool("ntfscat", [mounted.image.url.path, "/rollback.bin"]) == expected)
-        // Restored device I/O and a retry must be able to materialize safely.
-        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == 0)
-        try #require(payload.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
-        try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 0, 1) == 0)
-        expected.replaceSubrange(offset..<(offset + payload.count), with: payload)
-        try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
-        mounted.volume = nil
-        try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
-        #expect(try mounted.read(mounted.lookup("/rollback.bin")) == expected)
-        #expect(try tool("ntfscat", [mounted.image.url.path, "/rollback.bin"]) == expected)
+        let before = mounted.image.io.writeCount
+        var extent = nb_extent(), count = 0
+        #expect(mounted.api.nb_write!(mounted.volume, attr.ref, 4096, &marker, 1) == EPERM)
+        #expect(mounted.api.nb_truncate!(mounted.volume, attr.ref, 1) == EPERM)
+        #expect(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 4096, 512, 1, &extent, 1, &count) == EPERM)
+        #expect(count == 0)
+        #expect(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 4096, 512, 0, 1) == EPERM)
+        var request = nb_attr(); request.size = 1
+        #expect(mounted.api.nb_setattr!(mounted.volume, attr.ref, &request, UInt32(NB_SET_SIZE)) == EPERM)
+        #expect(mounted.image.io.writeCount == before)
+        let expected = Data(count: 65536)
+        #expect(try mounted.read(attr) == expected)
     }
 
-    @Test(arguments: Engine.allCases) func materializedSparseHolePreservesZeroEdges(engine: Engine) throws {
-        for completed in [false, true] {
-            let mounted = try Mounted(engine, "basic-512", write: true)
-            let name = Array("sparse.bin".utf16)
-            var attr = nb_attr()
-            try #require(name.withUnsafeBufferPointer { mounted.api.nb_create!(mounted.volume, mounted.api.nb_root_ref!(mounted.volume), $0.baseAddress, $0.count, NB_FILE, &attr) } == 0)
-            let fileSize = 65536
-            try #require(mounted.api.nb_truncate!(mounted.volume, attr.ref, UInt64(fileSize)) == 0)
-            var marker: UInt8 = 0x7c
-            try #require(mounted.api.nb_write!(mounted.volume, attr.ref, UInt64(fileSize - 1), &marker, 1) == 0)
-            try #require(mounted.api.nb_sync!(mounted.volume) == 0)
-            // Poison every reusable cluster, not just a cluster the allocator
-            // might choose. The allocated bitmap and metadata are left intact.
-            let cluster = try poisonFreeClusters(mounted)
-            let offset = cluster + 17
-            let payload = Data(repeating: 0x6a, count: 23)
-            var extent = nb_extent()
-            var count = 0
-            try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extent, 1, &count) == 0)
-            try #require(count == 1)
-            if completed {
-                try #require(payload.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
-            }
-            try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), completed ? 0 : EIO, 1) == (completed ? 0 : EIO))
-            try #require(mounted.api.nb_sync!(mounted.volume) == 0)
-            try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
-            mounted.volume = nil
-            try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
-            var expected = Data(count: fileSize)
-            expected[fileSize - 1] = marker
-            if completed { expected.replaceSubrange(offset..<(offset + payload.count), with: payload) }
-            #expect(try mounted.read(mounted.lookup("/sparse.bin")) == expected)
-            #expect(try tool("ntfscat", [mounted.image.url.path, "/sparse.bin"]) == expected)
-        }
-    }
 
     @Test(arguments: Engine.allCases) func metadataFaultReadOnlyRejectsRawMutation(engine: Engine) throws {
         let mounted = try Mounted(engine, "bigdir", write: true)

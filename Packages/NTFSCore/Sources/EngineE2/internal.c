@@ -15,8 +15,56 @@
 #undef ntfs_bdev_write
 #include <ntfscore.h>
 #include "engine_e2.h"
+int e2_allocate_non_sparse(struct ntfs_inode *, s64);
+int e2_grow_non_sparse(struct ntfs_inode *, s64);
 
 int e2_resident(ntfs_inode_t *h) { return !NInoNonResident(NTFS_I((struct inode *)h)); }
+int e2_sparse(ntfs_inode_t *h) { return NInoSparse(NTFS_I((struct inode *)h)); }
+void e2_force_readonly(ntfs_inode_t *h)
+{
+    struct inode *vi = (struct inode *)h;
+    NVolSetErrors(NTFS_I(vi)->vol);
+    vi->i_sb->s_flags |= SB_RDONLY;
+}
+int e2_free_space_ready(ntfs_inode_t *h)
+{
+    struct ntfs_volume *vol = NTFS_I((struct inode *)h)->vol;
+    flush_work(&vol->precalc_work);
+    s64 free = atomic64_read(&vol->free_clusters);
+    return free < 0 ? (int)-free : 0;
+}
+
+/* Reserved records and every direct $Extend child are diagnostic-read-only.
+ * Fail closed if the on-disk ancestry cannot be inspected. */
+int e2_reserved(ntfs_inode_t *h)
+{
+    struct ntfs_inode *ni = NTFS_I((struct inode *)h);
+    if (ni->mft_no < 24) return 1;
+    mutex_lock(&ni->mrec_lock);
+    struct ntfs_attr_search_ctx *ctx = ntfs_attr_get_search_ctx(ni, NULL);
+    int reserved = !ctx;
+    if (ctx) {
+        int err;
+        while (!(err = ntfs_attr_lookup(AT_FILE_NAME, NULL, 0, CASE_SENSITIVE, 0, NULL, 0, ctx))) {
+            struct file_name_attr *name = (void *)((char *)ctx->attr + le16_to_cpu(ctx->attr->data.resident.value_offset));
+            if ((le64_to_cpu(name->parent_directory) & 0xffffffffffffULL) == 11) { reserved = 1; break; }
+        }
+        if (err && err != -ENOENT) reserved = 1;
+        ntfs_attr_put_search_ctx(ctx);
+    }
+    mutex_unlock(&ni->mrec_lock);
+    return reserved;
+}
+
+int e2_invalidate(ntfs_inode_t *h, uint64_t off, uint64_t len)
+{
+    if (!len) return 0;
+    struct inode *vi = (struct inode *)h;
+    inode_lock(vi);
+    int err = invalidate_inode_pages2_range(vi->i_mapping, off / PAGE_SIZE, (off + len - 1) / PAGE_SIZE);
+    inode_unlock(vi);
+    return err < 0 ? -err : err;
+}
 
 int e2_writable(ntfs_inode_t *h)
 {
@@ -68,8 +116,28 @@ static int set_sizes(struct ntfs_inode *ni, uint64_t data, uint64_t initialized)
     ntfs_attr_put_search_ctx(ctx);
     return err;
 }
+int e2_resize(ntfs_inode_t *h, uint64_t size)
+{
+    struct inode *vi = (struct inode *)h;
+    struct ntfs_inode *ni = NTFS_I(vi);
+    if (size <= (uint64_t)ni->data_size) return -ntfs_truncate(h, size);
+    int err = e2_promote(h);
+    if (err) return err;
+    inode_lock(vi);
+    err = e2_writable(h);
+    if (!err && NInoSparse(ni)) err = EPERM;
+    if (!err) {
+        mutex_lock(&ni->mrec_lock);
+        err = e2_grow_non_sparse(ni, size);
+        if (!err) i_size_write(vi, size);
+        mutex_unlock(&ni->mrec_lock);
+    }
+    inode_unlock(vi);
+    return err < 0 ? -err : err;
+}
 
-int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len)
+
+int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len, int fail_after_allocation)
 {
     struct inode *vi = (struct inode *)h;
     struct ntfs_inode *ni = NTFS_I(vi);
@@ -77,20 +145,20 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len)
     inode_lock(vi);
     int err = 0;
     if (e2_writable(h)) { err = -EROFS; goto done; }
+    if (NInoSparse(ni)) { err = -EPERM; goto done; } /* F-R1: P1 materialization only. */
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
     if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY)) {
         err = ntfs_set_volume_flags(ni->vol, VOLUME_IS_DIRTY);
         if (err) goto done;
     }
-    uint64_t old_data = ni->data_size, old_init = ni->initialized_size;
+    uint64_t old_init = ni->initialized_size;
     if (off + len > (uint64_t)ni->allocated_size) {
         mutex_lock(&ni->mrec_lock);
-        err = ntfs_attr_expand(ni, off + len, 0);
-        /* Expansion may change EOF; allocation must not publish the raw I/O. */
-        int restore = set_sizes(ni, old_data, old_init);
+        /* Keep EOF/VDL unchanged even if any allocation/search step fails. */
+        err = e2_allocate_non_sparse(ni, off + len);
+        if (!err && fail_after_allocation) err = -ENOMEM;
         mutex_unlock(&ni->mrec_lock);
-        if (!err) err = restore;
         if (err) goto done;
     }
     uint64_t cluster = ni->vol->cluster_size;
@@ -186,6 +254,7 @@ int e2_finish(ntfs_inode_t *h, uint64_t off, uint64_t len)
     inode_lock(vi);
     int err = 0;
     if (e2_writable(h)) { err = -EROFS; goto done; }
+    if (NInoSparse(ni)) { err = -EPERM; goto done; }
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
     if (off + len > (uint64_t)ni->allocated_size) { err = -EINVAL; goto done; }

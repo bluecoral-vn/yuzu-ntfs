@@ -11,6 +11,7 @@
 #define NB_COMPRESSED (1u << 1)
 #define NB_ENCRYPTED (1u << 2)
 #define NB_SPARSE (1u << 3)
+#define NB_READ_ONLY (1u << 4) /* Reserved NTFS metadata: buffered reads only. */
 #define NB_EXT_DATA 1u
 #define NB_EXT_HOLE 2u
 #define NB_EXT_UNINIT 3u
@@ -55,6 +56,18 @@ int nb_sync(nb_volume *v);
  * callers select a factory and invoke these identically named vtable members.
  * This allows E1 and E2 to coexist without link-time symbol interposition.
  * Return values are positive errno (zero success); device callbacks likewise.
+ * Final-review F-R1/F-R2 supersede the sparse-write clauses below:
+ * - Files already marked sparse are read-only to users (EPERM for write,
+ *   truncate/setattr(size), write blockmap and write completion); their reads
+ *   remain supported. FSKit inhibits KOIO for them, as for compressed files.
+ * - Ordinary file growth uses HOLES_NO allocation, preserves non-sparse state,
+ *   and leaves VDL unchanged. Mapping preallocates without ever changing EOF.
+ * - Safe sparse materialization is P1: detached lcnalloc -> zero/flush ->
+ *   runlist insertion/mapping-pair publication. The old materialization code
+ *   is guarded/unreachable through this P0 interface, not a crash-safe claim.
+ * Reserved metadata is NB_READ_ONLY and rejects every mutation with EPERM.
+ * Named streams also carry NB_READ_ONLY for buffered routing; their mutations
+ * remain ENOTSUP. Failed raw writes invalidate cache without advancing sizes.
  * A nonzero dirent callback consumes that entry and stops enumeration. Resume
  * with its next_cookie. Names are UTF-16 code units, never NUL-terminated.
  * Blockmap offsets/lengths are bytes. T5-R1/T5-R2/T5-R3:
@@ -120,5 +133,9 @@ typedef struct nb_engine {
    * unmount releases outstanding holds before tearing down the core. */
   int (*nb_hold)(nb_volume *, uint64_t ref);
   int (*nb_release)(nb_volume *, uint64_t ref);
+  /* Append-only: discard cached state and release all ownership without any
+   * device callback I/O. Used for activation cancellation/deactivate, NOT a
+   * substitute for synchronize + ordinary unmount after mounted writes. */
+  int (*nb_dispose)(nb_volume *);
 } nb_engine;
 #endif
