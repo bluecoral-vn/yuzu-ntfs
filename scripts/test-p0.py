@@ -96,6 +96,27 @@ class P0PureTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ops.active_fskit('unparseable mount output')
 
+    def test_only_exact_apple_coredevice_mount_is_exempt(self):
+        recorded = (
+            'devices -- file:///Users/rom/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/ '
+            'on /Users/rom/Library/Developer/CoreDevice/DeviceFS '
+            '(devicefs, local, nodev, nosuid, noowners, noatime, quarantine, nobrowse, fskit, mounted by rom)\n'
+        )
+        with patch.object(ops.Path, 'home', return_value=Path('/Users/rom')):
+            self.assertEqual(ops.active_fskit(NATIVE_MOUNTS + recorded), [])
+            for variant in [
+                recorded.replace('/Developer/CoreDevice/DeviceFS', '/Developer/CoreDevice/Other'),
+                recorded.replace('CoreDeviceService/Data/', 'CoreDeviceService/Other/'),
+                recorded.replace('(devicefs,', '(lifs,'),
+                recorded.replace('(devicefs,', '(apfs,'),
+                recorded.replace('devices -- file:///', 'other -- file:///'),
+            ]:
+                with self.subTest(variant=variant):
+                    self.assertEqual(ops.active_fskit(NATIVE_MOUNTS + variant), [variant.rstrip()])
+            extra = 'guest on /Volumes/test (yuzuntfs, local, fskit)\n'
+            self.assertEqual(ops.active_fskit(recorded + extra), [extra.rstrip()])
+            self.assertTrue(ops.active_fskit(recorded + recorded))
+
     def test_recovery_requires_reboot_or_no_u_and_old_pid_absent(self):
         old = '{ sec = 1, usec = 0 }'
         new = '{ sec = ' + str(int(ops.WEDGED_AT) + 1) + ', usec = 0 }'

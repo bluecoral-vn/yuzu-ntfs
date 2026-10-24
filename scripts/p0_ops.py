@@ -64,13 +64,25 @@ def is_vm(output):
 
 
 def active_fskit(mount_output):
-    # Fail closed for unknown transports, including DeviceFS/CoreDevice/lifs.
+    # Q-R4 permits one exact Apple CoreDevice transport during agent refresh.
+    # All other unknown/user transports remain fail-closed.
     native = {'apfs', 'hfs', 'devfs', 'autofs', 'nfs', 'smbfs', 'webdav', 'udf', 'cd9660'}
+    home = Path.home()
+    coredevice_source = 'devices -- ' + (home / 'Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data').as_uri() + '/'
+    coredevice_mount = str(home / 'Library/Developer/CoreDevice/DeviceFS')
+    coredevice_seen = False
     active = []
     for line in mount_output.splitlines():
-        match = re.search(r'\(([^, )]+)', line)
+        match = re.fullmatch(r'(.+) on (.+) \(([^)]+)\)', line)
         require(match is not None, 'Cannot parse mount inventory')
-        if match[1].lower() not in native:
+        source, mountpoint, options = match.groups()
+        options = options.split(', ')
+        kind = options[0]
+        if (kind == 'devicefs' and source == coredevice_source
+                and mountpoint == coredevice_mount and not coredevice_seen):
+            coredevice_seen = True
+            continue
+        if kind.lower() not in native or 'fskit' in options:
             active.append(line)
     return active
 

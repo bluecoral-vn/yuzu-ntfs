@@ -180,7 +180,12 @@ scripts/p0-enable.sh
 Preflight requires a boot newer than the recorded wedged-session timestamp OR no
 state-U processes; PID 65911 must be absent even if reused. It refuses historical
 `build/r3/{exfat,mount-test,mount-test2}.img` attachments, active/unknown FSKit-capable
-mounts (including CoreDevice/DeviceFS), and a nonempty or malformed RW allowlist.
+mounts, and a nonempty or malformed RW allowlist. Owner ruling Q-R4 exempts exactly
+one Apple CoreDevice mount: type `devicefs`, mountpoint
+`$HOME/Library/Developer/CoreDevice/DeviceFS`, source
+`devices -- file://$HOME/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/`.
+A second DeviceFS or any other FSKit/unknown user transport still blocks. This
+exception does not authorize mounting or changing CoreDevice registrations.
 Every external command has a deadline and failure stops the procedure.
 
 Install inventories `pluginkit -mADvvv` plus all Yuzu-identifier `.app` bundles in
