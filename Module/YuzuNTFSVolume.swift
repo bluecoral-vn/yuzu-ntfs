@@ -426,7 +426,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 var cachedExtents: [nb_extent] = []
                 let tracked = operationID != .unspecified && item.operation == operationID
                 if !tracked {
-                    try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: false) {
+                    try YuzuNTFSMapping.query(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length)) {
                         cachedExtents.append(contentsOf: $0); return true
                     }
                 }

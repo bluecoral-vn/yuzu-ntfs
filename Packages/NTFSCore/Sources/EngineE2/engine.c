@@ -16,6 +16,7 @@ void e2_force_readonly(ntfs_inode_t *);
 int e2_free_space_ready(ntfs_inode_t *);
 int e2_writable(ntfs_inode_t *);
 int e2_promote(ntfs_inode_t *);
+int e2_query_extents(ntfs_inode_t *, uint64_t, uint64_t, nb_extent *, size_t, size_t *);
 int e2_map(ntfs_inode_t *, uint64_t, uint64_t, int, nb_extent *, size_t, size_t *);
 int e2_prepare(ntfs_inode_t *, uint64_t, uint64_t, int);
 int e2_invalidate(ntfs_inode_t *, uint64_t, uint64_t);
@@ -584,11 +585,22 @@ static int nb_e2_release(nb_volume *v, uint64_t ref) {
     free(h);
     return 0;
 }
+static int nb_e2_query_extents(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, nb_extent *out, size_t cap, size_t *count) {
+    if (!v || !count || (!out && cap)) return EINVAL;
+    *count = 0;
+    if (off > INT64_MAX || len > (uint64_t)INT64_MAX - off) return EFBIG;
+    if (ref >> 63) return ENOTSUP;
+    ntfs_inode_t *inode = NULL;
+    int rc = positive(inode_get(v, ref, &inode));
+    if (!rc) rc = e2_query_extents(inode, off, len, out, cap, count);
+    ntfs_inode_put(inode);
+    return rc;
+}
 static const nb_engine engine = {
     nb_e2_probe_state, nb_e2_mount, nb_e2_unmount, nb_e2_root_ref, nb_e2_lookup,
     nb_e2_readdir, nb_e2_read, nb_e2_create, nb_e2_write, nb_e2_truncate,
     nb_e2_blockmap, nb_e2_complete_io, nb_e2_sync,
     nb_e2_getattr, nb_e2_remove, nb_e2_statfs, nb_e2_setattr, nb_e2_rename,
-    nb_e2_hold, nb_e2_release, nb_e2_dispose
+    nb_e2_hold, nb_e2_release, nb_e2_dispose, nb_e2_query_extents
 };
 const nb_engine *nb_engine_e2(void) { return &engine; }

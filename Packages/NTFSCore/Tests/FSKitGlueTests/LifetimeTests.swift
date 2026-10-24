@@ -148,6 +148,13 @@ private final class OfflineVolume {
     }
     #expect(extents > 128)
     #expect(end == 140 * 4096)
+    var queried = 0, queryEnd: UInt64 = 0
+    try YuzuNTFSMapping.query(api: v.api, core: v.core, ref: target.ref, offset: 0, length: 140 * 4096) { batch in
+        for extent in batch { #expect(extent.logical == queryEnd); queryEnd += extent.length; queried += 1 }
+        return true
+    }
+    #expect(queried == extents)
+    #expect(queryEnd == end)
 }
 
 private final class CachedCompletion: @unchecked Sendable {

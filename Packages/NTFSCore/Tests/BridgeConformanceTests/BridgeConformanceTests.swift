@@ -408,6 +408,7 @@ struct BridgeConformanceTests {
         let m = try Mounted(engine, "basic-512")
         var a = try m.lookup("resident.txt"), extent = nb_extent(), count = 0
         #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, a.size, 0, &extent, 1, &count) == ENOTSUP)
+        #expect(m.api.nb_query_extents!(m.volume, a.ref, 0, a.size, &extent, 1, &count) == ENOTSUP)
         #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, a.size, 1, &extent, 1, &count) == EROFS)
         try #require(m.api.nb_getattr!(m.volume, a.ref, a.parent_ref, &a) == 0)
         #expect(a.flags & UInt32(NB_RESIDENT) != 0)

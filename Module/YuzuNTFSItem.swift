@@ -136,13 +136,27 @@ enum YuzuNTFSMapping {
     static func map(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
                     length: UInt64, write: Bool,
                     consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
+        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: write, physicalOnly: false, consume: consume)
+    }
+    static func query(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
+                      length: UInt64, consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
+        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: false, physicalOnly: true, consume: consume)
+    }
+    private static func ranges(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
+                               length: UInt64, write: Bool, physicalOnly: Bool,
+                               consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
         guard length <= UInt64.max - offset else { throw POSIXError(.EFBIG) }
         try withUnsafeTemporaryAllocation(of: nb_extent.self, capacity: 128) { buffer in
             let end = offset + length
             var cursor = offset
             while cursor < end {
                 var count = 0
-                let rc = api.nb_blockmap!(core, ref, cursor, end - cursor, write ? 1 : 0, buffer.baseAddress, buffer.count, &count)
+                let rc: Int32
+                if physicalOnly {
+                    rc = api.nb_query_extents!(core, ref, cursor, end - cursor, buffer.baseAddress, buffer.count, &count)
+                } else {
+                    rc = api.nb_blockmap!(core, ref, cursor, end - cursor, write ? 1 : 0, buffer.baseAddress, buffer.count, &count)
+                }
                 guard rc == 0 || rc == ENOBUFS else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(rc)) }
                 guard count > 0, count <= buffer.count else { throw POSIXError(.EIO) }
                 let batch = UnsafeBufferPointer(start: buffer.baseAddress, count: count)

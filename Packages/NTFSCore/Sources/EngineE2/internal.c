@@ -295,7 +295,7 @@ done:
     return err < 0 ? -err : err;
 }
 
-int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent *out, size_t cap, size_t *count)
+static int map_ranges(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, int physical_only, nb_extent *out, size_t cap, size_t *count)
 {
     struct inode *vi = (struct inode *)h;
     struct ntfs_inode *ni = NTFS_I(vi);
@@ -310,7 +310,7 @@ int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent
     uint64_t initialized = ni->initialized_size;
     uint64_t sector = ni->vol->sb->s_bdev->logical_block_size;
     uint64_t boundary = round_up(initialized, sector);
-    if (!for_write && initialized < (uint64_t)ni->data_size && initialized != boundary) {
+    if (!physical_only && !for_write && initialized < (uint64_t)ni->data_size && initialized != boundary) {
         if (e2_writable(h)) { err = ENOTSUP; goto done; }
         err = zero_gap(ni, initialized, min_t(uint64_t, boundary, ni->allocated_size));
         if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
@@ -332,7 +332,7 @@ int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent
         uint32_t kind = run->lcn == LCN_HOLE ? NB_EXT_HOLE : NB_EXT_DATA;
         if (run->lcn < 0 && run->lcn != LCN_HOLE) { err = EIO; up_write(&ni->runlist.lock); break; }
         if (for_write && kind == NB_EXT_DATA && pos >= initialized) kind = NB_EXT_UNINIT;
-        if (!for_write && kind == NB_EXT_DATA && initialized < (uint64_t)ni->data_size) {
+        if (!physical_only && !for_write && kind == NB_EXT_DATA && initialized < (uint64_t)ni->data_size) {
             if (pos >= boundary) kind = NB_EXT_UNINIT;
             else if (boundary < next) next = boundary;
         }
@@ -348,4 +348,12 @@ done:
     inode_unlock(vi);
     *count = used;
     return err;
+}
+int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent *out, size_t cap, size_t *count)
+{
+    return map_ranges(h, off, len, for_write, 0, out, cap, count);
+}
+int e2_query_extents(ntfs_inode_t *h, uint64_t off, uint64_t len, nb_extent *out, size_t cap, size_t *count)
+{
+    return map_ranges(h, off, len, 0, 1, out, cap, count);
 }

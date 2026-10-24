@@ -144,5 +144,14 @@ typedef struct nb_engine {
    * device callback I/O. Used for activation cancellation/deactivate, NOT a
    * substitute for synchronize + ordinary unmount after mounted writes. */
   int (*nb_dispose)(nb_volume *);
+  /* Append-only physical-range query for completion cache purges. Never
+   * allocates/promotes, zeroes, fsyncs/flushes or changes EOF/VDL, even on RW.
+   * Allocated ranges are NB_EXT_DATA regardless of VDL; holes/unallocated
+   * tails are NB_EXT_HOLE. ENOBUFS returns a nonempty prefix as blockmap does.
+   * Resident/compressed/encrypted/ADS data returns ENOTSUP, never promotion.
+   * This is NOT a read map: uninitialized physical bytes must not be exposed
+   * as file data. It is valid after effective-RO and failed raw operations. */
+  int (*nb_query_extents)(nb_volume *, uint64_t ref, uint64_t off, uint64_t len,
+                          nb_extent *, size_t cap, size_t *count);
 } nb_engine;
 #endif

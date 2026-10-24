@@ -43,6 +43,14 @@ private final class HandlerCore {
         api.nb_sync = { core in HandlerCore.state(core).failure }
         api.nb_unmount = { core in HandlerCore.state(core).closes += 1; return 0 }
         api.nb_dispose = { core in HandlerCore.state(core).closes += 1; return 0 }
+        api.nb_query_extents = { core, _, offset, length, buffer, capacity, count in
+            let s = HandlerCore.state(core)
+            if s.failure != 0 { return s.failure }
+            guard let physical = s.mappingPhysical, capacity > 0 else { return ENOTSUP }
+            buffer!.pointee = nb_extent(logical: offset, physical: physical, length: length, kind: UInt32(NB_EXT_DATA))
+            count!.pointee = 1
+            return 0
+        }
         api.nb_statfs = { core, out in let s = HandlerCore.state(core); out!.pointee.read_only = s.readOnly ? 1 : 0; return s.failure }
         api.nb_getattr = { core, ref, parent, out in
             let s = HandlerCore.state(core); if s.failure != 0 { return s.failure }
