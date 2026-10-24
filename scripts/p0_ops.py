@@ -112,8 +112,8 @@ class Runner:
             return ''
         # Do not use subprocess.run(timeout): its kill+communicate can wait
         # forever for a state-U process. Poll only; never block-reap on failure.
-        with tempfile.TemporaryFile() as output:
-            child = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=self.new_session, cwd=ROOT)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            child = subprocess.Popen(args, stdout=output, stderr=errors, start_new_session=self.new_session, cwd=ROOT)
             deadline = time.monotonic() + (timeout or self.timeout)
             while child.poll() is None:
                 if time.monotonic() >= deadline:
@@ -130,9 +130,14 @@ class Runner:
                 time.sleep(.05)
             output.seek(0)
             text = output.read().decode(errors='replace')
+            errors.seek(0)
+            diagnostics = errors.read().decode(errors='replace')
+        print(diagnostics, end='', file=sys.stderr, flush=True)
         print(text, end='', flush=True)
         require(child.returncode in allowed, f'Command failed ({child.returncode}): {shlex.join(args)}')
-        return text
+        # Plist consumers need machine-readable stdout, but diagnostic commands
+        # such as codesign -dvv intentionally return their result on stderr.
+        return text if '-plist' in args else text + diagnostics
 
 
 def empty_allowlist():

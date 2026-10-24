@@ -544,3 +544,24 @@ The isolated comparison at `00:55:23` used unsigned PID `97052` (exit 1) and tea
 Use `scripts/build-fsclientprobe.sh` for all future probe builds. It builds/signs the standalone executable with a verified installed Developer ID certificate fingerprint and certificate OU, then checks its signature/team before replacing the previous probe. `p0_ops.py` now checks exactly one `TeamIdentifier=37PX6W22C5` record from `codesign -dvv` before either enabled or disabled readiness queries; an absent/wrong-team result is rejected with the build-helper instruction. Recorded-output Python regression tests cover unsigned, missing, wrong-team, malformed and duplicate team records plus guard-before-query ordering. This corrects **readiness enumeration only**; it does not close any RW, throughput, VM or no-Terminal acceptance gate.
 
 Verification for this correction: `python3 scripts/test-p0.py`, `test-p0-install.py`, `test-p0-phases.py`, `test-bench.py`, and `test-seqio.py` passed **27 tests total** (16 + 4 + 1 + 4 + 2). `scripts/build-fsclientprobe.sh` successfully built and strict-verified the standalone probe using existing identity fingerprint `357630FEC1EA6B2B0871F13013DC8353D1107BC1` and required team `37PX6W22C5`. These checks do not run an installer, change registration/settings, or refresh the agent.
+
+## Host read-only acceptance (2026-10-25)
+
+The first authorized host RO attempt stopped before mounting: `hdiutil attach
+-nomount -plist` returned valid XML followed by a stderr deprecation warning.
+The operator runner had merged stderr into the plist response, causing
+`ExpatError: junk after document element`. Evidence directory:
+`build/p0-guest/0420c8bb-7d00-46e8-947f-ae054fd9b450`.
+No timeout or mounted I/O occurred. A separate deadline-supervised cleanup
+re-derived the sole owned device from `hdiutil info -plist` and cleanly detached
+the image. The RW allowlist remained empty.
+
+The runner now captures stdout/stderr separately while retaining diagnostics.
+The RO gate also samples resident/nonresident hashes against the basic manifest,
+all names-fixture hashes, and bigdir entries 0, 1, 49999 and 99999; it checks
+the bigdir `ls -1 -A` count against 100000, logs actual mount identity, prints
+before/after image hashes, and supervises the final no-attachment/no-U inventory.
+Each fixture is a freshly copied, script-attached image; no RW admission,
+benchmark, agent refresh or installed-module changes are part of this gate.
+The recorded warning regression and manifest/sample regressions passed;
+all six Python operator suites passed 31 tests (4 + 16 + 4 + 1 + 4 + 2).

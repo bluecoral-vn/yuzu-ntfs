@@ -4,6 +4,7 @@
 import argparse
 import errno
 import hashlib
+import json
 import mmap
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ import traceback
 import uuid
 
 from bench_supervisor import supervise
-from p0_ops import ROOT, MODULE, SUPPORT, ALLOW, Runner, require, allowlist, is_vm, preflight
+from p0_ops import ROOT, MODULE, SUPPORT, ALLOW, Runner, require, allowlist, empty_allowlist, is_vm, preflight
 
 RESIDENT_SHA = '4b2720d37f921134bfbb2deb27137d6f08fc55ced90f88c4971f5f42e06e1fc6'
 HOOK = SUPPORT / 'p0-force-ro'
@@ -132,22 +133,59 @@ def log_phase(path, action):
             require(logger.poll() is not None, f'log stream survived termination PID={logger.pid}')
 
 
-def ro_acceptance(runner, image, mount, evidence):
+def ro_samples(name, entries):
+    if name == 'bigdir':
+        require(len(entries) == 100000, 'Unexpected bigdir manifest count')
+        return [entries[index] for index in (0, 1, 49999, 99999)]
+    if name == 'names':
+        return entries
+    return [entry for entry in entries if entry['path'] in ('/resident.txt', '/nonresident.bin')]
+
+
+def verify_manifest_reads(mount, entries):
+    for entry in entries:
+        require(entry['type'] == 'file', 'RO sample must be a regular file')
+        target = mount / entry['path'].lstrip('/')
+        actual = digest(target)
+        require(actual == entry['sha256'], 'RO manifest hash mismatch: ' + entry['path'])
+        require(target.stat().st_size == entry['size'], 'RO manifest size mismatch: ' + entry['path'])
+        print(f"RO manifest SHA256 PASS {entry['path']} {actual}", flush=True)
+
+
+def ro_acceptance(runner, image, mount, evidence, fixture=None):
     require(not HOOK.exists(), 'Remove stale P0 force-RO hook before acceptance')
+    empty_allowlist()
+    fixture = fixture or ROOT / 'fixtures/basic-512.img'
+    manifest = json.loads(fixture.with_suffix('.manifest.json').read_text())
+    if fixture.stem not in ('names', 'bigdir'):
+        require(any(entry['path'] == '/resident.txt' and entry['sha256'] == RESIDENT_SHA
+                    for entry in manifest['entries']), 'Unexpected resident fixture manifest')
     before = digest(image)
     attachment = Attachment(runner, image, mount, True)
-    log = evidence / 'ro-callbacks.log'
+    log = evidence / (fixture.stem + '-ro-callbacks.log')
     def workload():
         try:
             attachment.attach()
             attachment.checked()
-            require(digest(mount / 'resident.txt') == RESIDENT_SHA, 'RO resident hash mismatch')
-            print('RO resident SHA256 PASS', flush=True)
+            empty_allowlist()
+            runner.run('/sbin/mount')
+            verify_manifest_reads(mount, ro_samples(fixture.stem, manifest['entries']))
+            if fixture.stem == 'bigdir':
+                listing = runner.run('/bin/ls', '-1', '-A', mount)
+                count = len(listing.splitlines())
+                require(count == manifest['entry_count'], f'bigdir ls count mismatch: {count}')
+                print(f'RO bigdir ls count PASS {count}', flush=True)
+            empty_allowlist()
         finally:
             attachment.close()
     log_phase(log, workload)
-    require(digest(image) == before, 'RO mount changed image bytes')
-    require('bufferedRead' in log.read_text(), 'Missing observed buffered RO read callback')
+    after = digest(image)
+    require(after == before, 'RO mount changed image bytes')
+    print(f'RO image SHA256 unchanged PASS {fixture.name} before={before} after={after}', flush=True)
+    text = log.read_text()
+    require('bufferedRead' in text if fixture.stem not in ('names', 'bigdir') else 'YuzuNTFSModule' in text,
+            'Missing observed RO module callback')
+    empty_allowlist()
 
 
 def refused(action, description):
@@ -255,6 +293,8 @@ def dry_plan(runner, args):
     runner.run('/sbin/mount', '-F', '-r', '-t', 'yuzuntfs', '<fresh-derived-device>', '<new-owned-mount>')
     runner.run('diskutil', 'info', '-plist', '<new-owned-mount>')
     print('CHECK resident SHA256=' + RESIDENT_SHA + '; bufferedRead callback; image hash unchanged')
+    print('REPEAT RO phase for names and bigdir fixtures; check manifest hashes, bigdir ls count=100000')
+    print('CHECK empty RW allowlist before/after every RO workload; final supervised attachment/process inventory')
     runner.run('/sbin/umount', '<new-owned-mount>')
     runner.run('hdiutil', 'detach', '<fresh-derived-device>')
     if args.allow_host_readonly:
@@ -304,9 +344,21 @@ def main():
         evidence = ROOT / 'build/p0-guest' / str(uuid.uuid4())
         evidence.mkdir(parents=True)
         print('Acceptance evidence:', evidence, flush=True)
-        ro_image = evidence / 'ro.img'; shutil.copyfile(image, ro_image)
-        phase('RO acceptance: ' + str(ro_image), serial, args.timeout,
-              lambda: ro_acceptance(runner, ro_image, evidence / 'ro-mount', evidence))
+        for fixture in (image, ROOT / 'fixtures/names.img', ROOT / 'fixtures/bigdir.img'):
+            ro_image = evidence / (fixture.stem + '-ro.img')
+            shutil.copyfile(fixture, ro_image)
+            phase('RO acceptance: ' + str(ro_image), image_serial(fixture), args.timeout,
+                  lambda: ro_acceptance(runner, ro_image, evidence / (fixture.stem + '-ro-mount'), evidence, fixture))
+        def final_inventory():
+            empty_allowlist()
+            processes = runner.run('ps', '-axo', 'pid=,state=,command=')
+            require(not any('U' in line.split(None, 2)[1] for line in processes.splitlines() if line.strip()),
+                    'State-U process after RO acceptance')
+            inventory = plistlib.loads(runner.run('hdiutil', 'info', '-plist').encode())
+            require(not any(Path(item.get('image-path', '')).is_relative_to(evidence) for item in inventory.get('images', [])),
+                    'Acceptance image attachment survived cleanup')
+            print('RO cleanup PASS: empty RW allowlist; no owned attachments; no state-U processes', flush=True)
+        phase('RO final inventory', serial, args.timeout, final_inventory)
         if args.allow_host_readonly:
             print('RO SUBSET PASS; no RW/benchmark performed')
             return 0
