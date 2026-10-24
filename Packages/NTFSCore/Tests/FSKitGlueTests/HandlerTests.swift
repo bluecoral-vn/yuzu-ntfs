@@ -374,8 +374,28 @@ private final class OversizedBlockResource: FSBlockDeviceResource {
     override var blockCount: UInt64 { 2 }
     override var physicalBlockSize: UInt64 { 4096 }
 }
-@Test func unrepresentableDeviceGeometryIsAnErrorNotATrap() {
+// The SDK exposes no block-resource initializer. A zeroed raw instance owns
+// descriptor 0: its deallocator closes stdin, racing other tests that reuse it
+// for an image. Guard the SDK's actual ivar type/offset BEFORE allocating, then
+// give this geometry-only test double the standard invalid descriptor (-1).
+// No real resource is opened, and no private layout assumption ships in Module.
+private func oversizedResource() throws -> OversizedBlockResource {
+    let descriptor = try #require(class_getInstanceVariable(FSBlockDeviceResource.self, "_fileDescriptor"))
+    let encoding = try #require(ivar_getTypeEncoding(descriptor))
+    try #require(String(cString: encoding) == "i", "SDK resource descriptor layout changed")
     let resource = class_createInstance(OversizedBlockResource.self, 0) as! OversizedBlockResource
+    Unmanaged.passUnretained(resource).toOpaque().advanced(by: ivar_getOffset(descriptor))
+        .storeBytes(of: Int32(-1), as: Int32.self)
+    return resource
+}
+@Test func geometryStubDoesNotOwnProcessDescriptorZero() throws {
+    let resource = try oversizedResource()
+    let descriptor = try #require(class_getInstanceVariable(FSBlockDeviceResource.self, "_fileDescriptor"))
+    let fd = Unmanaged.passUnretained(resource).toOpaque().advanced(by: ivar_getOffset(descriptor)).load(as: Int32.self)
+    #expect(fd == -1)
+}
+@Test func unrepresentableDeviceGeometryIsAnErrorNotATrap() throws {
+    let resource = try oversizedResource()
     do {
         _ = try YuzuNTFSDevice(resource)
         Issue.record("Invalid resource geometry was accepted")
@@ -384,9 +404,9 @@ private final class OversizedBlockResource: FSBlockDeviceResource {
     }
 }
 
-@Test func geometryOverflowRepliesFromFilesystemHandlers() {
+@Test func geometryOverflowRepliesFromFilesystemHandlers() throws {
     let filesystem = YuzuNTFSFileSystem()
-    let resource = class_createInstance(OversizedBlockResource.self, 0) as! OversizedBlockResource
+    let resource = try oversizedResource()
     let probe = ReplyOnce(), load = ReplyOnce()
     filesystem.probeResource(resource: resource) { _, error in probe.accept(error) }
     filesystem.loadResource(resource: resource, options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in load.accept(error) }
