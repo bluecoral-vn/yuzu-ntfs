@@ -18,6 +18,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 MODULE = 'com.bluecoral.vn.yuzuntfs.fsmodule'
+TEAM = '37PX6W22C5'
 APP = Path('/Applications/Yuzu NTFS.app')
 APPEX = APP / 'Contents/Extensions/YuzuNTFSModule.appex'
 LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
@@ -163,7 +164,16 @@ def preflight(runner):
     print('P0 PREFLIGHT PASS')
 
 
+def check_probe_signature(text):
+    require(re.findall(r'^TeamIdentifier=(.*)$', text, re.MULTILINE) == [TEAM],
+            f'FSClientProbe must be signed for team {TEAM}; run scripts/build-fsclientprobe.sh '
+            '(an ad-hoc/wrong-team caller cannot reliably enumerate Yuzu)')
+
+
 def probe(runner, enabled):
+    signature = runner.run('codesign', '-dvv', ROOT / 'build/r1/FSClientProbe')
+    if not runner.dry:
+        check_probe_signature(signature)
     text = runner.run(ROOT / 'build/r1/FSClientProbe', '--expect-enabled' if enabled else '--expect-disabled', '--expect-path', APPEX)
     if not runner.dry:
         check_probe(text, enabled)

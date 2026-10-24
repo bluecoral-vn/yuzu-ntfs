@@ -61,6 +61,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 scripts/setup-signing.sh
 xcodegen generate
 xcodebuild -scheme YuzuNTFS -configuration Release-Direct -derivedDataPath build/r1 build
+scripts/build-fsclientprobe.sh
 ditto -c -k --keepParent 'build/r1/Build/Products/Release-Direct/Yuzu NTFS.app' build/r1/YuzuNTFS.zip
 xcrun notarytool submit build/r1/YuzuNTFS.zip --keychain-profile yuzu-notary --wait --output-format json
 xcrun stapler staple 'build/r1/Build/Products/Release-Direct/Yuzu NTFS.app'
@@ -78,6 +79,8 @@ source=Notarized Developer ID
 ```
 
 Built bundle location and metadata were checked: `.appex` is correctly in `Contents/Extensions/`, `EXAppExtensionAttributes.EXExtensionPointIdentifier` is `com.apple.fskit.fsmodule`, `FSShortName` is `yuzuntfs`, block resources are enabled, and there is no legacy `NSExtension` dictionary. No layout workaround was needed. The requested locally installed FUSE-T reference could not be found: both Spotlight's exact module-ID search and PlugInKit returned no matches. Its enabled-list entry is not proof that its binary is installed on this Mac.
+
+**Caller-signing correction (2026-10-25):** readiness must use the team-signed probe built by `scripts/build-fsclientprobe.sh`, not raw `swift`/`swiftc`. An ad-hoc probe (`TeamIdentifier=not set`) omitted Yuzu on the same host/registration where an otherwise unchanged, Developer ID team-signed copy returned `enabled=true` at the installed URL. `fskitd`'s `getTeamIDForToken:` / `errno 2, retrieving team ID` came from the ad-hoc diagnostic caller's audit token. This independently establishes caller-team filtering as a confounder for the earlier missing-module observations; it does not by itself disprove the separately observed duplicate/UUID-cache issues. The helper selects an existing installed certificate by fingerprint and X.509 OU and verifies the signed probe's exact team; operator readiness queries now reject unsigned/wrong-team probes. No module metadata, registration, agent restart or mount was needed to demonstrate this correction. See the R3 readiness-diagnosis section for the recorded PID comparison.
 
 ## Registration and UUID-cache finding
 

@@ -154,12 +154,13 @@ has no suppression-setting guard. Inventory all registrations, including the fin
 builds. Manual discovery can rediscover unpacked duplicate apps. Keep unused
 candidates as archives, not discoverable app bundles; never build during acceptance.
 
-Rebuild the readiness probe without running it:
+Build and team-sign the readiness probe without running it. The helper selects an existing Developer ID certificate by installed fingerprint and certificate OU, verifies `TeamIdentifier=37PX6W22C5`, and performs no app registration:
 
 ```sh
-mkdir -p build/r1
-xcrun swiftc -framework FSKit spikes/r1/FSClientProbe.swift -o build/r1/FSClientProbe
+scripts/build-fsclientprobe.sh
 ```
+
+Do not use raw `swiftc` as a replacement: it leaves an ad-hoc probe, and FSClient's caller-team filtering can hide Yuzu even when the installed module is enabled. Operator commands reject a missing/wrong-team probe signature before using its readiness result.
 
 ### 3. Preflight, install, exercise rollback, enable (media still disconnected)
 
@@ -364,7 +365,8 @@ Commands and key outputs (worktree root; Xcode commands use
 ```sh
 xcodegen generate
 xcodebuild -scheme YuzuNTFS -configuration Release-Direct -derivedDataPath build/r1 build
-xcrun swiftc -framework FSKit spikes/r1/FSClientProbe.swift -o build/r1/FSClientProbe
+# Corrected probe recipe; the historical run used raw swiftc here and omitted signing.
+scripts/build-fsclientprobe.sh
 ditto 'build/r1/Build/Products/Release-Direct/Yuzu NTFS.app' 'build/release/Yuzu NTFS.app'
 ditto -c -k --keepParent 'build/release/Yuzu NTFS.app' build/release/YuzuNTFS-notary.zip
 xcrun notarytool submit build/release/YuzuNTFS-notary.zip \
@@ -526,3 +528,19 @@ observation; its module was still enumerated enabled by FSClientProbe.
 No manual remount, image attach, daemon escalation, registration reset,
 guest acceptance, benchmark or build followed installation.
 **Result: installation performed; readiness BLOCKED, not a completed enabled install.**
+
+## Readiness diagnosis and correction — 2026-10-25
+
+The Q-R5 readiness failure above was a **diagnostic caller-signing defect**, not evidence that the installed module was disabled. The recorded compile-only command had replaced `build/r1/FSClientProbe` with an ad-hoc/linker-signed executable (`TeamIdentifier=not set`). On this host that caller enumerated Apple modules and DeviceFS but omitted Yuzu. A copy of the **same executable**, changed only to a signature from the existing Developer ID team `37PX6W22C5`, immediately reported:
+
+```text
+com.bluecoral.vn.yuzuntfs.fsmodule enabled=true url=/Applications/Yuzu NTFS.app/Contents/Extensions/YuzuNTFSModule.appex
+```
+
+The isolated comparison at `00:55:23` used unsigned PID `97052` (exit 1) and team-signed PID `97053` (exit 0). The adjacent `fskitd` records identify the first caller's `getTeamIDForToken:` failure / `errno 2, retrieving team ID`; the signed caller's connection has no corresponding team-lookup error. This is a caller audit-token lookup, not a missing module provisioning profile.
+
+`pluginkit -mADvvv` still showed exactly one elected installed module, UUID `798BF996-E6FE-4AB2-B806-C6F25DDF293C`. The installed signature/profile authorized the FSKit entitlement and team; its block/offloaded-I/O metadata and embedded git commit were not changed. The `((null))` PlugInKit version display did not prevent successful enumeration after signing only the caller. No agent refresh, module rebuild/reinstall, registration/reset, image attachment or mount was needed or performed for this correction. DeviceFS mount recovery and NTFS mounted behavior were not tested or inferred.
+
+Use `scripts/build-fsclientprobe.sh` for all future probe builds. It builds/signs the standalone executable with a verified installed Developer ID certificate fingerprint and certificate OU, then checks its signature/team before replacing the previous probe. `p0_ops.py` now checks exactly one `TeamIdentifier=37PX6W22C5` record from `codesign -dvv` before either enabled or disabled readiness queries; an absent/wrong-team result is rejected with the build-helper instruction. Recorded-output Python regression tests cover unsigned, missing, wrong-team, malformed and duplicate team records plus guard-before-query ordering. This corrects **readiness enumeration only**; it does not close any RW, throughput, VM or no-Terminal acceptance gate.
+
+Verification for this correction: `python3 scripts/test-p0.py`, `test-p0-install.py`, `test-p0-phases.py`, `test-bench.py`, and `test-seqio.py` passed **27 tests total** (16 + 4 + 1 + 4 + 2). `scripts/build-fsclientprobe.sh` successfully built and strict-verified the standalone probe using existing identity fingerprint `357630FEC1EA6B2B0871F13013DC8353D1107BC1` and required team `37PX6W22C5`. These checks do not run an installer, change registration/settings, or refresh the agent.

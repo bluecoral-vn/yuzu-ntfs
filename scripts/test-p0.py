@@ -27,6 +27,19 @@ NATIVE_MOUNTS = '''/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journale
 devfs on /dev (devfs, local, nobrowse)
 map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)
 '''
+# Relevant fields recorded from the unsigned and same-team probe on 2026-10-25.
+ADHOC_PROBE = '''Executable=/Users/rom/Projects/yuzu-ntfs-p0/build/r1/FSClientProbe
+Identifier=FSClientProbe
+Signature=adhoc
+TeamIdentifier=not set
+'''
+SIGNED_PROBE = '''Executable=/Users/rom/Projects/yuzu-ntfs-p0/build/r1/FSClientProbe-team-signed
+Identifier=FSClientProbe-team-signed
+Authority=Developer ID Application: Nguyen Le (37PX6W22C5)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+TeamIdentifier=37PX6W22C5
+'''
 
 
 class P0PureTests(unittest.TestCase):
@@ -49,6 +62,30 @@ class P0PureTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ops.check_probe(enabled, False)
 
+    def test_probe_signature_requires_exactly_one_expected_team_record(self):
+        ops.check_probe_signature(SIGNED_PROBE)
+        for recorded in [ADHOC_PROBE, '', SIGNED_PROBE.replace('37PX6W22C5', 'OTHERTEAM1'),
+                         SIGNED_PROBE.replace('TeamIdentifier=', 'note TeamIdentifier='),
+                         SIGNED_PROBE + 'TeamIdentifier=37PX6W22C5\n']:
+            with self.subTest(recorded=recorded):
+                with self.assertRaisesRegex(RuntimeError, 'build-fsclientprobe.sh'):
+                    ops.check_probe_signature(recorded)
+
+    def test_probe_rejects_adhoc_caller_before_querying_enabled_state(self):
+        runner = Mock(dry=False)
+        runner.run.return_value = ADHOC_PROBE
+        with self.assertRaisesRegex(RuntimeError, 'build-fsclientprobe.sh'):
+            ops.probe(runner, True)
+        runner.run.assert_called_once_with('codesign', '-dvv', ops.ROOT / 'build/r1/FSClientProbe')
+
+    def test_probe_checks_signed_caller_before_readiness_query(self):
+        runner = Mock(dry=False)
+        runner.run.side_effect = [SIGNED_PROBE, ops.MODULE + ' enabled=true url=' + str(ops.APPEX)]
+        ops.probe(runner, True)
+        self.assertEqual(runner.run.call_args_list[0].args,
+                         ('codesign', '-dvv', ops.ROOT / 'build/r1/FSClientProbe'))
+        self.assertEqual(runner.run.call_args_list[1].args[0], ops.ROOT / 'build/r1/FSClientProbe')
+
     def test_disable_enable_preserve_unrelated_modules_and_back_up(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = Path(directory) / 'enabledModules.plist'
@@ -59,6 +96,8 @@ class P0PureTests(unittest.TestCase):
                     return NATIVE_MOUNTS
                 if command[0] == 'pgrep':
                     return ''
+                if command[:2] == ('codesign', '-dvv'):
+                    return SIGNED_PROBE
                 if command[0] == ops.ROOT / 'build/r1/FSClientProbe':
                     state = 'true' if '--expect-enabled' in command else 'false'
                     return ops.MODULE + ' enabled=' + state + ' url=' + str(ops.APPEX)
