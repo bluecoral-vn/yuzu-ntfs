@@ -7,24 +7,46 @@ import NTFSProbe
 
 /// One macOS 26-compatible protocol path, also supported by the macOS 27 SDK.
 final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOperations, FSVolume.OpenCloseOperations, FSVolumeKernelOffloadedIOOperations {
-    let device: YuzuNTFSDevice
+    let device: any YuzuNTFSDeviceAccess
     let boot: NTFSBootSector
     let writable: Bool
     static func inhibitsIO(flags: UInt32, writable: Bool) -> Bool {
         !allowsWrite(flags: flags) || (!writable && flags & UInt32(NB_RESIDENT) != 0)
     }
     static func allowsWrite(flags: UInt32) -> Bool {
-        flags & UInt32(NB_COMPRESSED | NB_ENCRYPTED) == 0
+        flags & UInt32(NB_COMPRESSED | NB_ENCRYPTED | NB_SPARSE | NB_READ_ONLY) == 0
     }
-    let api = nb_engine_e2()!.pointee
+    static func reclaimLegacy(_ item: YuzuNTFSItem, table: YuzuNTFSItemTable) {
+        // macOS 26 cannot confirm the SDK's publication/reclaim count.
+        // Keep the weak identity and inode pin until actual deinitialization.
+    }
+    let api: nb_engine
     private var core: OpaquePointer?
+    private var terminalReadOnly = false
+    private func effectivelyWritable() -> Bool {
+        guard writable, core != nil, !terminalReadOnly else { return false }
+        var state = nb_stat()
+        if api.nb_statfs!(core, &state) != 0 || state.read_only != 0 { terminalReadOnly = true }
+        return !terminalReadOnly
+    }
     private let items = YuzuNTFSItemTable()
     private var rootRef: UInt64 = 5
-    init(device: FSBlockDeviceResource, boot: NTFSBootSector, readOnly: Bool = false) {
-        self.device = YuzuNTFSDevice(device)
+    convenience init(device: FSBlockDeviceResource, boot: NTFSBootSector, readOnly: Bool = false) {
+        let writable = !readOnly && WriteAllowlist.permits(serial: boot.serial, contents: try? String(contentsOf: WriteAllowlist.fileURL, encoding: .utf8)) && device.isWritable
+        self.init(device: YuzuNTFSDevice(device), boot: boot, writable: writable, api: nb_engine_e2()!.pointee)
+    }
+    init(device: any YuzuNTFSDeviceAccess, boot: NTFSBootSector, writable: Bool, api: nb_engine) {
+        self.device = device
         self.boot = boot
-        writable = !readOnly && WriteAllowlist.permits(serial: boot.serial, contents: try? String(contentsOf: WriteAllowlist.fileURL, encoding: .utf8)) && device.isWritable
+        self.writable = writable
+        self.api = api
         super.init(volumeID: FSVolume.Identifier(uuid: boot.volumeUUID), volumeName: FSFileName(string: "Yuzu-NTFS"))
+    }
+    deinit { if let core { _ = api.nb_dispose!(core) } }
+    private func discardCore() {
+        if let core { _ = api.nb_dispose!(core); self.core = nil }
+        items.removeAll()
+        device.metadataActive = false
     }
     private func check(_ code: Int32) throws { if code != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(code)) } }
     private func serial<T>(_ body: () throws -> T) rethrows -> T { try items.withLock(body) }
@@ -64,7 +86,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         result.flags = attr.ntfs_attrs & 2 != 0 ? UInt32(UF_HIDDEN) : 0
         // T7-R4: on RW mounts the first actual mapping promotes resident data.
         // RO resident reads stay on the byte-copy path and never mutate disk.
-        result.inhibitKernelOffloadedIO = attr.type != NB_FILE || Self.inhibitsIO(flags: attr.flags, writable: writable)
+        result.inhibitKernelOffloadedIO = attr.type != NB_FILE || Self.inhibitsIO(flags: attr.flags, writable: effectivelyWritable())
         result.modifyTime = time(attr.mtime); result.changeTime = time(attr.ctime)
         result.accessTime = time(attr.atime); result.birthTime = time(attr.crtime)
         return result
@@ -93,7 +115,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         do {
             try serial {
                 if modes.contains(.write) {
-                    guard writable else { throw POSIXError(.EROFS) }
+                    guard effectivelyWritable() else { throw POSIXError(.EROFS) }
                     var a = nb_attr(); try check(api.nb_getattr!(core, node(item).ref, node(item).parent, &a))
                     if !Self.allowsWrite(flags: a.flags) { throw POSIXError(.EPERM) }
                 }
@@ -136,10 +158,13 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     func activate(options: FSTaskOptions, replyHandler reply: @escaping (FSItem?, (any Error)?) -> Void) {
         do {
             try serial {
+                guard core == nil else { throw POSIXError(.EBUSY) }
                 var dev = device.blockdev
                 try check(api.nb_mount!(&dev, writable ? 1 : 0, &core))
                 rootRef = api.nb_root_ref!(core)
-                try publish(rootRef, parent: rootRef) { reply($0, nil) }
+                terminalReadOnly = false
+                do { try publish(rootRef, parent: rootRef) { reply($0, nil) } }
+                catch { discardCore(); throw error }
             }
         } catch { reply(nil, error) }
     }
@@ -150,14 +175,14 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         serial { if let core { _ = api.nb_sync!(core); _ = api.nb_unmount!(core); self.core = nil } }
         reply()
     }
-    func deactivate(options: FSDeactivateOptions, replyHandler reply: @escaping ((any Error)?) -> Void) { serial { items.removeAll() }; reply(nil) }
+    func deactivate(options: FSDeactivateOptions, replyHandler reply: @escaping ((any Error)?) -> Void) { serial { discardCore() }; reply(nil) }
     func synchronize(flags: FSSyncFlags, replyHandler reply: @escaping ((any Error)?) -> Void) {
         do { try serial { try check(api.nb_sync!(core)) }; reply(nil) } catch { reply(error) }
     }
     func reclaimItem(_ item: FSItem, replyHandler reply: @escaping ((any Error)?) -> Void) {
         node(item).normal { serial {
             let clear = { self.items.forget(self.node(item)) }
-            if #available(macOS 27, *) { _ = item.tryReclaim(clear) } else { clear() }
+            if #available(macOS 27, *) { _ = item.tryReclaim(clear) } else { Self.reclaimLegacy(self.node(item), table: self.items) }
         } }
         reply(nil)
     }
@@ -180,11 +205,20 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         do {
             try serial {
                 guard type == .file || type == .directory else { throw POSIXError(.ENOTSUP) }
+                if request.isValid(.size), request.size > UInt64(Int64.max) { throw POSIXError(.EFBIG) }
                 var a = nb_attr(); let u = try units(name)
                 try check(api.nb_create!(core, node(directory).ref, u, u.count, UInt32(type == .directory ? NB_DIR : NB_FILE), &a))
-                try publish(a.ref, parent: a.parent_ref, prepare: { item in
-                    try apply(request, to: item); node(directory).version &+= 1
-                }) { reply($0, name, nil) }
+                node(directory).version &+= 1
+                do {
+                    try publish(a.ref, parent: a.parent_ref, prepare: { item in
+                        try apply(request, to: item)
+                    }) { reply($0, name, nil) }
+                } catch {
+                    let rollback = api.nb_remove!(core, node(directory).ref, u, u.count)
+                    if rollback == 0 { node(directory).version &+= 1 }
+                    else { throw POSIXError(.EIO) }
+                    throw error
+                }
             }
         } catch { reply(nil, nil, error) }
     }
@@ -257,6 +291,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             guard offset >= 0 else { throw POSIXError(.EINVAL) }
             if operationID != .unspecified { item.operation = operationID }
             try serial {
+                if flags.contains(.write) && !effectivelyWritable() { throw POSIXError(.EROFS) }
                 try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: flags.contains(.write)) { extents in
                     try device.purge(extents)
                     if operationID != .unspecified { item.extents.append(contentsOf: extents) }
@@ -265,7 +300,8 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                         while done < extent.length {
                             let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
                             let zero = extent.kind == NB_EXT_HOLE || (extent.kind == NB_EXT_UNINIT && !flags.contains(.write))
-                            if !packer.packExtent(resource: device.resource, type: zero ? .zeroFill : .data,
+                            guard let resource = device.extentResource else { throw POSIXError(.ENODEV) }
+                            if !packer.packExtent(resource: resource, type: zero ? .zeroFill : .data,
                                 logicalOffset: off_t(extent.logical + done), physicalOffset: off_t(extent.physical + done), length: Int(chunk)) { return false }
                             done += chunk
                         }

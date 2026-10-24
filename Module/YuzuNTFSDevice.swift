@@ -3,10 +3,18 @@ import Foundation
 import FSKit
 import NTFSBridge
 
+protocol YuzuNTFSDeviceAccess: AnyObject {
+    var blockdev: nb_blockdev { get }
+    var extentResource: FSBlockDeviceResource? { get }
+    var metadataActive: Bool { get set }
+    func purge<Extents: Collection>(_ extents: Extents) throws where Extents.Element == nb_extent
+}
+
 /// Fixed device-sector cache keys: FSKit forbids overlapping metadata buffers.
 /// The bridge also performs sub-sector probes and edge zeroing, hence RMW here.
-final class YuzuNTFSDevice {
+final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
     let resource: FSBlockDeviceResource
+    var extentResource: FSBlockDeviceResource? { resource }
     private let lock = NSRecursiveLock()
     private var active = false
     var metadataActive: Bool {
