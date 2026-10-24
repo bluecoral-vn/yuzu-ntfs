@@ -711,3 +711,48 @@ tests** passed plain (466.691 s bridge), ASan (434.834 s bridge), and explicitly
 linked UBSan (465.710 s bridge), with no sanitizer diagnostics. All six Python
 suites again passed **32 tests**. The SDK completion optionality warning remains.
 No app/release build, registration, install, live mount or push was performed.
+
+## Reinstall + host RO rerun (2026-10-25)
+
+**STOPPED at installer scope validation; no retry or live acceptance run.**
+Approved source was `7381280eb695465a60e5516d272b6ba11cda99ce`.
+Release-Direct built successfully into `build/release` using
+`-derivedDataPath build/reinstall-7381280` and an explicit
+`CONFIGURATION_BUILD_DIR=$PWD/build/release`. The existing Developer ID signing
+configuration was used. The team-signed FSClientProbe was built before installation
+(`TeamIdentifier=37PX6W22C5`, identity
+`357630FEC1EA6B2B0871F13013DC8353D1107BC1`). No build followed installation.
+
+API-key notarization submission `8608ed95-13a8-4320-ac5f-bde60b590700`
+was **Accepted**; stapling succeeded. Staged `codesign --verify --deep --strict`
+passed and `spctl` reported `accepted`, `source=Notarized Developer ID`.
+Both Info.plists contained the approved full commit, extension KOIO was `true`,
+`Contents/Resources/AppIcon.icns` existed and `CFBundleIconName=AppIcon`.
+Staged module executable SHA-256:
+`99afd94e43102b83c853972e7208307884fe12bccc58693d2e1444ff7ad720eb`.
+
+All five operator/acceptance dry-runs succeeded. Live `p0-preflight.sh` passed;
+the installer repeated preflight successfully, including the empty RW allowlist.
+Neither mount inventory contained DeviceFS; no DeviceFS operation or agent refresh
+was performed.
+
+The single live installer invocation used the approved full `--expected-commit`
+and stopped with exit 1 **before registration/copy/settings changes**:
+
+```text
+P0 STOP: Refusing out-of-scope, aliased or unverified bundle(s); operator must isolate them: /Users/rom/Library/Developer/Xcode/DerivedData/YuzuNTFS-ggixrolbwswkchdvpwinppvvteuz/Build/Products/Debug/YuzuNTFS.app
+```
+
+Thus the current script does **not** implement the requested Q-R3 DerivedData
+pruning authorization. No manual isolation, script modification or retry was made,
+as the execution instruction requires stopping on the first failure.
+Installer evidence: `build/p0-reinstall-20261025.log`.
+Inventory showed installed plugin UUID `798BF996-E6FE-4AB2-B806-C6F25DDF293C`
+(old installation), DerivedData UUID `695E4915-CF22-4DAB-A520-BA16B753FEF2`,
+and staged UUID `CD61B063-7F0C-4598-A59D-88C7DDB1A333`.
+No new installed UUID or enabled=true readiness result is claimed.
+
+Resident hash, nonresident hash, names hashes, bigdir hashes/count, callback
+evidence and image-unchanged checks were all **NOT RUN**. Disable/enable rollback
+was not reached. The allowlist was not changed; no RW, benchmark, real-media
+operation, daemon kill, subsequent build or push was performed.
