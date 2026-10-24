@@ -295,7 +295,7 @@ done:
     return err < 0 ? -err : err;
 }
 
-static int map_ranges(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, int physical_only, nb_extent *out, size_t cap, size_t *count)
+static int map_ranges(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, int physical_only, int preserve_write, nb_extent *out, size_t cap, size_t *count)
 {
     struct inode *vi = (struct inode *)h;
     struct ntfs_inode *ni = NTFS_I(vi);
@@ -312,9 +312,11 @@ static int map_ranges(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write
     uint64_t boundary = round_up(initialized, sector);
     if (!physical_only && !for_write && initialized < (uint64_t)ni->data_size && initialized != boundary) {
         if (e2_writable(h)) { err = ENOTSUP; goto done; }
-        err = zero_gap(ni, initialized, min_t(uint64_t, boundary, ni->allocated_size));
-        if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
-        if (err) { err = err < 0 ? -err : err; goto done; }
+        if (!preserve_write) {
+            err = zero_gap(ni, initialized, min_t(uint64_t, boundary, ni->allocated_size));
+            if (!err) err = ntfs_bdev_flush(ni->vol->sb->s_bdev);
+            if (err) { err = err < 0 ? -err : err; goto done; }
+        }
     }
     end = off + len;
     while (pos < end) {
@@ -349,11 +351,11 @@ done:
     *count = used;
     return err;
 }
-int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, nb_extent *out, size_t cap, size_t *count)
+int e2_map(ntfs_inode_t *h, uint64_t off, uint64_t len, int for_write, int preserve_write, nb_extent *out, size_t cap, size_t *count)
 {
-    return map_ranges(h, off, len, for_write, 0, out, cap, count);
+    return map_ranges(h, off, len, for_write, 0, preserve_write, out, cap, count);
 }
 int e2_query_extents(ntfs_inode_t *h, uint64_t off, uint64_t len, nb_extent *out, size_t cap, size_t *count)
 {
-    return map_ranges(h, off, len, 0, 1, out, cap, count);
+    return map_ranges(h, off, len, 0, 1, 0, out, cap, count);
 }

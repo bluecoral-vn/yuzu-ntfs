@@ -135,16 +135,18 @@ final class YuzuNTFSItemTable {
 /// partial progress, not a corrupt/unsupported mapping. No per-batch heap array.
 enum YuzuNTFSMapping {
     static func map(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
-                    length: UInt64, write: Bool,
+                    length: UInt64, write: Bool, preservingWrite: Bool = false,
                     consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
-        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: write, physicalOnly: false, consume: consume)
+        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: write,
+                   physicalOnly: false, preservingWrite: preservingWrite && !write, consume: consume)
     }
     static func query(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
                       length: UInt64, consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
-        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: false, physicalOnly: true, consume: consume)
+        try ranges(api: api, core: core, ref: ref, offset: offset, length: length, write: false,
+                   physicalOnly: true, preservingWrite: false, consume: consume)
     }
     private static func ranges(api: nb_engine, core: OpaquePointer?, ref: UInt64, offset: UInt64,
-                               length: UInt64, write: Bool, physicalOnly: Bool,
+                               length: UInt64, write: Bool, physicalOnly: Bool, preservingWrite: Bool,
                                consume: (UnsafeBufferPointer<nb_extent>) throws -> Bool) throws {
         guard length <= UInt64.max - offset else { throw POSIXError(.EFBIG) }
         try withUnsafeTemporaryAllocation(of: nb_extent.self, capacity: 128) { buffer in
@@ -155,6 +157,8 @@ enum YuzuNTFSMapping {
                 let rc: Int32
                 if physicalOnly {
                     rc = api.nb_query_extents!(core, ref, cursor, end - cursor, buffer.baseAddress, buffer.count, &count)
+                } else if preservingWrite {
+                    rc = api.nb_read_map_during_write!(core, ref, cursor, end - cursor, buffer.baseAddress, buffer.count, &count)
                 } else {
                     rc = api.nb_blockmap!(core, ref, cursor, end - cursor, write ? 1 : 0, buffer.baseAddress, buffer.count, &count)
                 }

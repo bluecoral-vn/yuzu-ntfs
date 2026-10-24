@@ -679,3 +679,35 @@ python3 scripts/test-p0-phases.py
 python3 scripts/test-p0-readonly.py
 python3 scripts/test-seqio.py
 ```
+
+### Read-lease review correction R-R1 — partial-VDL interleaving
+
+Allowing read blockmaps during a write lease exposed another interaction:
+`EngineE2/internal.c` padded and flushed a partial VDL sector even when the
+read requested a disjoint range. With VDL 37 and EOF 8192, a kernel write
+could land bytes 37–511, then a read at either 0 or 4096 would erase them
+before the write completion. The new exact-interleaving regression failed
+on both offsets: one device write during the read, zeroed payload, and zeros
+persisted after completion/remount.
+
+Per ruling R-R1, lease presence is checked while holding the item I/O lock
+continuously through the mapping call. An outstanding explicit **write**
+selects append-only `nb_read_map_during_write`: no fsync, promotion, allocation,
+zeroing or flush; DATA extends through the block-rounded VDL and UNINIT follows
+that boundary. Completion remains responsible for the write's partial-sector
+tail. Without a write lease, the original read-map zero/flush is retained:
+unconditionally returning DATA would expose stale bytes from Windows-written
+partial-VDL sectors. RO partial-VDL maps remain unsupported/inhibited.
+Read maps still own no lease and never wait for another callback.
+
+Regressions cover read offsets 0 and 4096 with an outstanding write (landed
+payload survives completion and an RO remount), the same offsets without a
+lease (poisoned tail becomes zeros while bytes 0–36 survive), and RO maps
+(ENOTSUP, zero writes, buffered prefix/tail correct). Packed DATA/zeroFill
+types are asserted; A2's aligned mapping boundaries remain unchanged.
+
+R-R1 final matrix (same commands above): **17 probe/policy + 36 glue + 30 bridge
+tests** passed plain (466.691 s bridge), ASan (434.834 s bridge), and explicitly
+linked UBSan (465.710 s bridge), with no sanitizer diagnostics. All six Python
+suites again passed **32 tests**. The SDK completion optionality warning remains.
+No app/release build, registration, install, live mount or push was performed.

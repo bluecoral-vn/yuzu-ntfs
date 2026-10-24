@@ -51,6 +51,7 @@ private final class HandlerCore {
             count!.pointee = 1
             return 0
         }
+        api.nb_read_map_during_write = api.nb_query_extents
         api.nb_statfs = { core, out in let s = HandlerCore.state(core); out!.pointee.read_only = s.readOnly ? 1 : 0; return s.failure }
         api.nb_getattr = { core, ref, parent, out in
             let s = HandlerCore.state(core); if s.failure != 0 { return s.failure }

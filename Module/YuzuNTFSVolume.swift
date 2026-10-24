@@ -382,7 +382,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     // the latch. Its already-published inhibition stays fixed.
                     if attr.flags & UInt32(NB_RESIDENT | NB_UNALIGNED_VDL) != 0 { throw POSIXError(.EROFS) }
                 }
-                try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length), write: flags.contains(.write)) { extents in
+                // io remains locked: no write can acquire/release a lease
+                // between this decision and partial-VDL mapping/zeroing.
+                try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length),
+                                       write: flags.contains(.write), preservingWrite: item.operation != nil) { extents in
                     try device.purge(extents)
                     if leasesWrite { item.extents.append(contentsOf: extents) }
                     for extent in extents {

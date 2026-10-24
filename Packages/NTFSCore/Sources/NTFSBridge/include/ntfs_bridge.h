@@ -112,8 +112,9 @@ int nb_sync(nb_volume *v);
  *   inherited attributes). P0 FSKit rejects writes to those inhibited items.
  * - Write mappings/completion reject a currently read-only or shut-down core
  *   with EROFS, including an errors=remount-ro transition after mount.
- * Callers serialize offloaded I/O with writes, truncate and other offloaded
- * ranges for that inode until completion (including failed completion).
+ * Callers serialize inode mutations and explicit write-lease decisions.
+ * Reads overlapping an outstanding write use nb_read_map_during_write;
+ * they never wait for another callback or acquire their own write lease.
  */
 typedef struct nb_engine {
   int (*nb_probe_state)(const nb_blockdev *, nb_state *);
@@ -153,5 +154,14 @@ typedef struct nb_engine {
    * as file data. It is valid after effective-RO and failed raw operations. */
   int (*nb_query_extents)(nb_volume *, uint64_t ref, uint64_t off, uint64_t len,
                           nb_extent *, size_t cap, size_t *count);
+  /* Append-only read map while an explicit write lease exists on this inode.
+   * Caller holds the item lock from checking the lease through this call.
+   * Never fsyncs/promotes/allocates/zeroes/flushes. DATA through ceil(VDL,
+   * device block), UNINIT thereafter; holes remain HOLE. The outstanding
+   * writer owns partial-block initialization at completion. Do not use this
+   * for ordinary reads: stale partial-VDL tails first need zeroing. RO partial
+   * VDL remains ENOTSUP. Bounded ENOBUFS prefixes match nb_blockmap. */
+  int (*nb_read_map_during_write)(nb_volume *, uint64_t ref, uint64_t off, uint64_t len,
+                                 nb_extent *, size_t cap, size_t *count);
 } nb_engine;
 #endif

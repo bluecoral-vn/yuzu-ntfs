@@ -139,6 +139,7 @@ private final class CompletionDevice: YuzuNTFSDeviceAccess {
 // real bridge and real disposable fixture. The resource never owns an OS fd.
 private final class MappingCapture {
     var ranges: [(off_t, off_t, Int)] = []
+    var types: [FSExtentType] = []
     let storage = UnsafeMutableRawPointer.allocate(byteCount: 512, alignment: 8)
     deinit { storage.deallocate() }
 }
@@ -152,9 +153,10 @@ private func capture(_ object: NSObject) -> MappingCapture {
 }
 private final class ReadMappingPacker: FSExtentPacker {
     var ranges: [(off_t, off_t, Int)] { capture(self).ranges }
+    var types: [FSExtentType] { capture(self).types }
     override func packExtent(resource: FSBlockDeviceResource, type: FSExtentType,
                              logicalOffset: off_t, physicalOffset: off_t, length: Int) -> Bool {
-        #expect(type == .data)
+        capture(self).types.append(type)
         capture(self).ranges.append((logicalOffset, physicalOffset, length))
         return true
     }
@@ -194,7 +196,8 @@ private func mappedFixture(_ device: CompletionDevice, writable: Bool) throws ->
     return (volume, try #require(found as? YuzuNTFSItem))
 }
 private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: off_t,
-                        length: Int, id: Int, write: Bool = false) throws -> ReadMappingPacker {
+                        length: Int, id: Int, write: Bool = false,
+                        expectedType: FSExtentType = .data) throws -> ReadMappingPacker {
     let packer = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
     var calls = 0, failure: (any Error)?
     volume.blockmapFile(item, offset: offset, length: length, flags: write ? [.write] : [.read],
@@ -204,6 +207,7 @@ private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: 
     #expect(calls == 1)
     try #require(failure == nil)
     #expect(packer.ranges.reduce(0) { $0 + $1.2 } == length)
+    #expect(packer.types.allSatisfy { $0 == expectedType })
     return packer
 }
 
@@ -280,4 +284,78 @@ func readMappingsWithoutCompletionAllowLaterReadAndMapping(writable: Bool) throw
         calls += 1; #expect(error == nil && attributes?.size == 4096)
     }
     #expect(calls == 4 && item.operation == nil)
+}
+
+@Test(arguments: [off_t(0), off_t(4096)])
+func readMappingDuringPartialVDLWritePreservesLandedBytes(readOffset: off_t) throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    device.mappingResource = try mappingResource()
+    let (item, extent) = try device.partialVDLFile() // VDL 37, EOF 8192.
+    _ = try mapFixture(volume, item, offset: 0, length: 512, id: 41, write: true)
+    let payload = [UInt8](repeating: 0xB6, count: 475)
+    try #require(pwrite(device.fd, payload, payload.count, off_t(extent.physical + 37)) == payload.count)
+    let before = device.writes
+    _ = try mapFixture(volume, item, offset: readOffset, length: 512, id: 42,
+                       expectedType: readOffset == 0 ? .data : .zeroFill)
+    #expect(device.writes == before, "A read map must not zero the outstanding write's partial VDL sector")
+    #expect(item.operation == FSOperationID(rawValue: 41))
+    var raw = [UInt8](repeating: 0, count: 512)
+    try #require(pread(device.fd, &raw, raw.count, off_t(extent.physical)) == raw.count)
+    #expect(Array(raw.prefix(37)) == [UInt8](repeating: 0x41, count: 37))
+    #expect(Array(raw.dropFirst(37)) == payload)
+    var calls = 0
+    volume.completeIO(for: item, offset: 37, length: 475, status: nil, flags: [.write],
+                       operationID: FSOperationID(rawValue: 41)) { error in
+        calls += 1; #expect(error == nil)
+    }
+    #expect(calls == 1)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    var persisted = [UInt8](repeating: 0, count: 512), got = 0
+    try #require(nb_engine_e2()!.pointee.nb_read!(device.core, item.ref, 0, &persisted, persisted.count, &got) == 0)
+    #expect(got == 512 && persisted == [UInt8](repeating: 0x41, count: 37) + payload)
+}
+
+@Test func readOnlyPartialVDLMappingNeverWritesOrPublishesUnsafeSector() throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    let (item, extent) = try device.partialVDLFile()
+    let poison = [UInt8](repeating: 0xC7, count: 475)
+    try #require(pwrite(device.fd, poison, poison.count, off_t(extent.physical + 37)) == poison.count)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    let before = device.writes
+    let api = nb_engine_e2()!.pointee
+    for offset: UInt64 in [0, 4096] {
+        var output = nb_extent(), count = 0
+        #expect(api.nb_blockmap!(device.core, item.ref, offset, 512, 0, &output, 1, &count) == ENOTSUP)
+        #expect(count == 0)
+    }
+    #expect(device.writes == before)
+    var bytes = [UInt8](repeating: 0, count: 512), got = 0
+    try #require(api.nb_read!(device.core, item.ref, 0, &bytes, bytes.count, &got) == 0)
+    #expect(got == 512)
+    #expect(Array(bytes.prefix(37)) == [UInt8](repeating: 0x41, count: 37))
+    #expect(bytes.dropFirst(37).allSatisfy { $0 == 0 })
+}
+
+@Test(arguments: [off_t(0), off_t(4096)])
+func readMappingWithoutWriteLeasePadsPartialVDLTail(readOffset: off_t) throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
+    let (item, extent) = try device.partialVDLFile()
+    let poison = [UInt8](repeating: 0xC7, count: 475)
+    try #require(pwrite(device.fd, poison, poison.count, off_t(extent.physical + 37)) == poison.count)
+    #expect(item.operation == nil)
+    let before = device.writes
+    _ = try mapFixture(volume, item, offset: readOffset, length: 512, id: 51,
+                       expectedType: readOffset == 0 ? .data : .zeroFill)
+    #expect(device.writes > before)
+    var raw = [UInt8](repeating: 1, count: 512)
+    try #require(pread(device.fd, &raw, raw.count, off_t(extent.physical)) == raw.count)
+    #expect(Array(raw.prefix(37)) == [UInt8](repeating: 0x41, count: 37))
+    #expect(raw.dropFirst(37).allSatisfy { $0 == 0 })
+    #expect(item.operation == nil)
 }
