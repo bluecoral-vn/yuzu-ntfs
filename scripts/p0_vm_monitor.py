@@ -15,6 +15,13 @@ class UStateMonitor:
         self.owned_paths = tuple(str(path) for path in owned_paths)
         self.waits = {}
 
+    def command_owned(self, command):
+        return ('YuzuNTFSModule' in command
+                or '/com.apple.fskit.exfat.appex/Contents/MacOS/' in command
+                or Path(command.split()[0]).name == 'fskitd'
+                or any(name in command for name in ('p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
+                or any(path in command for path in self.owned_paths))
+
     def observe(self, text, now, open_paths=None, mounting_benchmark=False):
         current, stops, info = {}, [], []
         for row in text.splitlines():
@@ -27,9 +34,8 @@ class UStateMonitor:
             extension = 'YuzuNTFSModule' in command or '/com.apple.fskit.exfat.appex/Contents/MacOS/' in command
             mount_grace = mounting_benchmark and extension
             paths = (open_paths or {}).get(pid, ())
-            owned = (extension or Path(command.split()[0]).name == 'fskitd'
-                     or any(name in command for name in ('p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
-                     or any(path in command or any(path in opened for opened in paths) for path in self.owned_paths))
+            owned = self.command_owned(command) or any(
+                path in opened for path in self.owned_paths for opened in paths)
             key = (pid, command, owned, mount_grace)
             since = self.waits.get(key, now)
             current[key] = since
@@ -117,7 +123,10 @@ def main():
                 paths = {}
                 for row in result.stdout.splitlines():
                     fields = row.split(None, 2)
-                    if len(fields) == 3 and 'U' in fields[1]:
+                    # Command/path ownership is already conclusive. lsof on
+                    # that blocked worker cannot add information and may itself
+                    # block; unknown processes still require fail-closed inspection.
+                    if len(fields) == 3 and 'U' in fields[1] and not monitor.command_owned(fields[2]):
                         opened = subprocess.run(['lsof', '-b', '-a', '-p', fields[0], '-Fn'], capture_output=True, text=True, timeout=5)
                         if opened.returncode not in (0, 1):
                             raise RuntimeError('Cannot inspect U-process cwd/open files: ' + opened.stderr)

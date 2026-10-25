@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import unittest
+import ast
+from pathlib import Path
+from types import SimpleNamespace
+import p0_vm_monitor
 from p0_vm_monitor import UStateMonitor
 
 class RecordedProcessStates(unittest.TestCase):
+    def test_known_owned_u_worker_skips_redundant_lsof_but_unknown_is_inspected(self):
+        source = Path(p0_vm_monitor.__file__).read_text()
+        loop = next(node for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.For) and ast.unparse(node.iter) == 'result.stdout.splitlines()')
+        calls = []
+        def inspect(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stdout='n/owned/mount/file\n', stderr='')
+        namespace = dict(paths={}, monitor=UStateMonitor(['/owned/mount']),
+                         result=SimpleNamespace(stdout='2376 U /owned/mount/seqio write file\n88 U /usr/libexec/mds'),
+                         subprocess=SimpleNamespace(run=inspect))
+        exec(compile(ast.Module(body=[loop], type_ignores=[]), p0_vm_monitor.__file__, 'exec'), namespace)
+        self.assertEqual(calls, [['lsof', '-b', '-a', '-p', '88', '-Fn']])
+        self.assertEqual(namespace['paths'], {88: ['/owned/mount/file']})
+
     def test_recorded_homeeventsd_transient_is_info(self):
         monitor = UStateMonitor(['/Users/lume/yuzu-ntfs/build/p0-guest'])
         stop, info = monitor.observe('877 U /System/Library/PrivateFrameworks/HomeKitEvents.framework/Support/homeeventsd', 0)

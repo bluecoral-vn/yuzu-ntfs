@@ -1833,3 +1833,85 @@ Key files: `yuzu-functional-final-guest-evidence.zip`,
 `guest-shutdown.log`, `owned-clone-delete.log`,
 `host-vm-service-remove.log`, `final-host-vm-inventory.log`.
 
+## Performance pass 2 (2026-10-25)
+
+### Mount profiling before changing transport
+
+Candidate transport change: `eb69b12`. Evidence directory:
+`build/qc-runs/20261025-performance-2/`. A detached, freshly formatted
+8 GiB regular NTFS image was profiled through `nb_blockdev` callbacks,
+with independent RO/RW private clones. No host attachment/mount was used.
+`BridgePerf mount-ro|mount-rw` now records read/write bytes, request counts,
+flushes, maximum request size and the old adapter's equivalent 512-byte
+resource-call count. At-return snapshots can include concurrent bitmap
+progress; the total rows below are taken after teardown joins the worker.
+
+| Headless mount + teardown | Read bytes / calls | Write bytes / calls | Flushes, mount / total | Maximum read / write |
+|---|---:|---:|---:|---:|
+| Fresh 8 GiB, RO | 486400 / 121 | 0 / 0 | 0 / 2 | 4096 / 0 |
+| Fresh 8 GiB, RW | 498176 / 142 | 8192 / 2 | 1 / 4 | 4096 / 4096 |
+| 100000-entry fixture, RO | 249856 / 63 | 0 / 0 | 0 / 2 | 4096 / 0 |
+| 100000-entry fixture, RW | 259584 / 80 | 8192 / 2 | 1 / 4 | 4096 / 4096 |
+
+The empty 8 GiB image has a **42946560-byte $LogFile**; its entire log is
+not rewritten by mount. The 100000-entry fixture has a **102465536-byte
+$MFT**, yet mount reads only about 0.25 MiB, refuting an eager whole-MFT
+scan on that fixture. The bitmap worker accounts for bounded background
+bitmap traffic, not tens of MiB of synchronous log clearing. RW mount has
+only one bridge flush, not a flush per sector/write. Before metadata
+activation, the Swift flush callback does not call FSKit metadataFlush at
+all, so a per-write F_FULLFSYNC-equivalent is not the measured cause.
+
+The transport mismatch is directly reproduced in actual-adapter headless
+tests: the engine issues 4 KiB requests, but the old adapter splits each
+into eight separate 512-byte FSKit calls. The 8 GiB RO/RW total read traffic
+expanded to **950 / 973 sector calls**, versus **121 / 142 engine calls**.
+The mount-time amplification hypothesis is therefore the per-sector
+resource boundary, not the number of bytes being initialized.
+
+### Bounded transport correction
+
+Before metadata-cache activation, aligned reads/writes now preserve the
+whole engine request in one resource call. Partial-sector probes and
+edge writes keep their original RMW path. Once metadata is active, every
+request still uses the same fixed device-sector cache key; no larger,
+overlapping cache buffers or mounted direct-I/O bypass were introduced.
+
+| Actual-adapter regression | Before | After | Bytes |
+|---|---:|---:|---:|
+| Aligned 8 KiB read/write, 512-byte resource | 16 calls each | 1 call each | 8192, unchanged |
+| Aligned 8 KiB read/write, 4Kn resource | 2 calls each | 1 call each | 8192, unchanged |
+| Mounted three-byte edge write | Immediate metadataWrite | Delayed metadataWrite | Exact sector RMW retained |
+| Explicit mounted flush | 1 synchronous metadataFlush | 1 synchronous metadataFlush | No asynchronous success substitution |
+
+The SDK distinguishes immediate metadataWrite from delayedMetadataWrite.
+Mounted writes now use the latter, with the original synchronous flush
+boundaries retained: payload/gap/tail before VDL publication, flush-before-
+purge, periodic five-second checkpoint, explicit sync and eject. Dirty
+marker re-arming from `2efc262`, D9 clean-state admission, E3 terminal
+initialization errors, exact sector mappings and all safety rulings remain
+unchanged. The real adapter tests first failed on the old call counts and
+immediate-write method, then passed on both 512-byte and 4Kn media; they
+also pin partial-sector adjacent bytes and EIO on short resource reads.
+
+### First mounted result and ownership-inspection correction
+
+`eb69b12` passed the full unchanged functional acceptance, including M-R1,
+in fresh clone `yuzu-qc-run-ntfs-perf2-20261025`. Initial mount improved from
+31.957127 s to **2.691257 s**, with subsequent mounts **2.382913–2.933503 s**.
+The first sequential pair measured **465.077 MiB/s write / 631.459 MiB/s
+read**; these are single samples, not medians or a comparison against a
+new reference denominator.
+
+The second sequential write was interrupted by a monitor infrastructure
+error, not a 20-second U ruling: `lsof -b -p 2376` exceeded its five-second
+deadline even though the process was already conclusively classified as
+owned `seqio` by its command/path. Its recorded U timer was only 0 seconds.
+Evidence: `yuzu-final-guest-evidence.zip`. The monitor now omits redundant
+lsof only for commands already positively identified as owned; their U
+timers still run normally. Unknown commands still require fail-closed
+open-file inspection. V-R1..V-R4, phase deadlines and mount-only grace are
+unchanged. A regression first reproduced the unnecessary inspection, and
+all seven Python suites then passed (49 tests). The signed `eb69b12` app
+is immutable; this correction changes only its external QC monitor.
+
