@@ -1339,3 +1339,87 @@ inventory was empty, RW allowlist zero bytes, no force-RO hook. Requested
 shutdown returned expected tcpShutdown; guest runner and our host service
 were removed, our clone deleted and payload share removed. Goldens and other
 sessions' VMs were left intact. No push.
+
+## Append corruption root cause (2026-10-25)
+
+This section supersedes the exact-coordinate contract proposed above. The
+macOS 27 SDK serializer accepts byte-granular extents, but acceptance by the
+serializer does **not** prove those extents are safe for kernel device I/O.
+
+### Targeted observations
+
+Evidence is retained in `build/qc-runs/20261025-append-contract/`.
+The unchanged exact-extent candidate was installed in a fresh
+`yuzu-qc-27-dev` clone. A deadline-supervised `O_RDWR | O_APPEND` probe
+recorded the mounted bytes before open, before write, before fsync, after
+fsync, after close, and after clean unmount/remount:
+
+- Before write: the correct original 37 fixture bytes.
+- Before/after fsync and after close: the correct original37 + `P0-append`.
+- After remount: `P0-append` at offset 0 followed by 37 zeros.
+- The READ callback was KOIO `blockmapFile(0,37)`, returning **DATA** at
+  physical 53121024, length 37, not buffered `read` or zeroFill.
+- The WRITE callback returned logical37/physical53121061/length9; completion
+  was `(0,46)`. The original kernel-visible cached file contents were
+  demonstrably correct. Missing original data in the cache (H1) is excluded.
+
+The minimal sector-covering experiment changed mapping boundaries to
+`floor(offset / deviceSector)` through `ceil((offset + length) / deviceSector)`.
+The item was published with `flags=NB_RESIDENT`, `size=37`, `inhibit=false`.
+The first READ promoted it and returned DATA logical0/physical53121024/length512.
+The kernel retained that map: append needed **no WRITE blockmap**, and
+`completeIO(0,46,unspecified)` followed. All mounted snapshots **and clean
+remount** contained original37 + append9. The exact and sector experiment
+images, callback logs and full snapshots are in `exact-probe.zip` and
+`sector-probe.zip`; the line-by-line observations are also in
+`exact-probe-result.log` and `sector-probe-result.log`.
+
+The evidenced boundary error is supplying byte-sized mappings to a
+sector-oriented retained device mapping/writeback path, not VDL zeroFill or
+resident promotion losing the prefix. The kernel's internal arithmetic that
+turns the invalid byte mapping into the observed payload-at-zero transfer
+remains **[INFERENCE]**; a completeIO range alone does not expose its source
+buffer or prove it wrote a whole VM page. A 512-byte covering mapping fixes
+this fixture, so requiring a whole VM page is not supported by this evidence.
+
+### NTFSKit oracle attempt
+
+Reference: [NTFSKit 96ecccb1](https://github.com/whereteam/ntfskit/tree/96ecccb1b1f6dba2ecd158ed0ff9a21e7917c80d).
+The test-only checkout was instrumented to log every packed extent and
+blockmap/completion request, built with its real NTFS-3G and libbde
+dependencies, and installed **without Yuzu** in a separate fresh clone.
+Developer ID signing and then ad-hoc signing were both attempted.
+The final enabled-module enumeration reported the reference enabled=true,
+but launching it failed with ExtensionKit error 2: AMFI/taskgated reported
+restricted FSKit entitlements and **no matching provisioning profile**.
+No reference blockmap ran, so there is **no empirical NTFSKit mapping
+comparison** and no claim that its append behavior is correct. Source
+inspection alone shows its bridge emits exact byte ranges, like the failing
+Yuzu candidate; this is not a working oracle. See
+`oracle-{enabled-result,launch-blocker,adhoc-result}.log`.
+No security policy, SIP setting or third-party provisioning identity was changed.
+
+### Corrected implementation and regressions
+
+Both READ and WRITE pack responses now cover complete device sectors;
+allocation/map growth does not publish rounded EOF. Completion still uses
+the kernel's exact byte range, including unspecified completions that reuse
+a prior READ map. Every packed extent is checked for logical, physical and
+length sector alignment. The source logs publication eligibility as well as
+every read/write packed tuple.
+
+The prior headless RMW model incorrectly repaired an invalid tuple by
+subtracting the intra-sector physical offset before its simulated pwrite.
+It now requires whole-sector mappings and writes them without such rebasing.
+Regressions cover explicit resident append, reuse of a READ map with no
+WRITE blockmap, nonaligned nonresident EOF, 1000003-byte writes, VDL tail
+zeros, gap writes, outstanding-write read maps and exact detached EOF.
+The new sector-mapping regression first failed on the old tuple `(37,+37,9)`.
+
+The benchmark's Yuzu mount guard also reuses the acceptance validator:
+the owned `mount(8)` row is authoritative, absent diskutil FSKit fields are
+allowed, and a reported `ntfs` personality is accepted only for an already
+proven `yuzuntfs` row. Wrong device, filesystem, mountpoint or RO state still
+fails closed. The new recorded-output regression first reproduced both
+false refusals before the guard was changed.
+

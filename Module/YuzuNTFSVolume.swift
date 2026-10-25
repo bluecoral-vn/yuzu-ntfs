@@ -87,6 +87,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 var attr = nb_attr()
                 try check(api.nb_getattr!(core, ref, parent, &attr))
                 item.inhibitsKernelIO = attr.type != NB_FILE || Self.inhibitsIO(flags: attr.flags, writable: effectivelyWritable())
+                Self.p0Log.info("publish ref=\(ref) flags=\(attr.flags) size=\(attr.size) inhibit=\(item.inhibitsKernelIO == true)")
             }
             try prepare(item)
         }, reply: reply)
@@ -384,11 +385,14 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 }
                 let sector = UInt64(device.blockdev.sector_size)
                 guard sector > 0 else { throw POSIXError(.EINVAL) }
-                // The request's first byte is also the kernel transfer buffer's
-                // first byte. Never widen/rebase it to a sector boundary: an
-                // append at 37 must map physical cluster start + 37, not start.
-                // Byte starts/ends are valid; only internal splits need alignment.
-                let mappingOffset = UInt64(offset), mappingLength = UInt64(length)
+                // The kernel retains READ maps for later writeback. Cover
+                // whole device sectors on both paths; byte-sized extents can
+                // read correctly yet corrupt a subsequent partial-sector write.
+                let mappingOffset = UInt64(offset) / sector * sector
+                let requestEnd = try YuzuNTFSBoundary.adding(UInt64(offset), UInt64(length))
+                let mappingEnd = length == 0 ? mappingOffset : try YuzuNTFSBoundary.adding(requestEnd, sector - 1) / sector * sector
+                _ = try YuzuNTFSBoundary.offset(mappingEnd)
+                let mappingLength = mappingEnd - mappingOffset
                 var packedOffset = mappingOffset
                 // io remains locked: no write can acquire/release a lease
                 // between this decision and partial-VDL mapping/zeroing.
@@ -401,7 +405,8 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                         _ = try YuzuNTFSBoundary.offset(end)
                         _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, extent.length))
                         guard extent.logical == packedOffset, extent.length > 0,
-                              extent.kind == NB_EXT_HOLE || extent.physical % sector == extent.logical % sector else { throw POSIXError(.EINVAL) }
+                              extent.logical % sector == 0, extent.length % sector == 0,
+                              extent.kind == NB_EXT_HOLE || extent.physical % sector == 0 else { throw POSIXError(.EINVAL) }
                         var done: UInt64 = 0
                         while done < extent.length {
                             let logicalValue = try YuzuNTFSBoundary.adding(extent.logical, done)

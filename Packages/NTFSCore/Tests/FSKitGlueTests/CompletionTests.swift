@@ -209,10 +209,14 @@ private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: 
     }
     #expect(calls == 1)
     try #require(failure == nil)
-    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == length)
-    var cursor = offset
-    for (logical, _, size) in packer.ranges {
-        #expect(logical == cursor, "Mapping must start at the request, with contiguous later runs")
+    let sector: off_t = 512
+    let start = offset / sector * sector
+    let end = (offset + off_t(length) + sector - 1) / sector * sector
+    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == Int(end - start))
+    var cursor = start
+    for (logical, physical, size) in packer.ranges {
+        #expect(logical == cursor, "Mapping must cover the whole first sector, with contiguous later runs")
+        #expect(logical % sector == 0 && physical % sector == 0 && size % Int(sector) == 0)
         cursor += off_t(size)
     }
     #expect(packer.types.allSatisfy { $0 == expectedType })
@@ -374,26 +378,25 @@ private func fixtureBytes(_ device: CompletionDevice, _ item: YuzuNTFSItem, leng
     return Array(bytes.prefix(got))
 }
 
-// Model cold kernel writeback, rather than pwrite(payload) into an idealized
-// mapping. FSKit's transfer buffer starts at the REQUEST offset: a response
-// that starts earlier does not authorize rebasing that buffer. Reject such a
-// response before I/O, including on reads. Fill covering device sectors from
-// READ-map DATA on disk or zeroFill, zero beyond the kernel's EOF, overlay the
-// payload, then write whole sectors through the exact WRITE translation.
+// Model the sector-covering contract observed in the VM. The previous model
+// silently subtracted the intra-sector physical offset from an invalid extent,
+// thereby repairing precisely the mapping that corrupted real mounted writes.
+// Reject byte-granular WRITE extents instead: populate the cache from DATA or
+// zeroFill READ mappings, overlay at the file offset, and transfer whole sectors.
 private func kernelRMW(_ device: CompletionDevice, _ volume: YuzuNTFSVolume,
                        _ item: YuzuNTFSItem, _ packer: ReadMappingPacker,
                        offset: off_t, bytes: [UInt8]) throws {
     let sector = off_t(device.blockdev.sector_size)
-    var cursor = offset
-    for (index, range) in packer.ranges.enumerated() {
-        try #require(range.0 == cursor, "WRITE mapping does not start at request")
-        try #require(packer.types[index] == .data)
-        try #require(range.1 % sector == range.0 % sector)
-        cursor += off_t(range.2)
-    }
-    try #require(cursor == offset + off_t(bytes.count), "WRITE mapping exceeds request")
     let start = offset - offset % sector
     let end = ((offset + off_t(bytes.count) + sector - 1) / sector) * sector
+    var cursor = start
+    for (index, range) in packer.ranges.enumerated() {
+        try #require(range.0 == cursor, "WRITE mapping omits the covering sector prefix")
+        try #require(packer.types[index] == .data)
+        try #require(range.0 % sector == 0 && range.1 % sector == 0 && range.2 % Int(sector) == 0)
+        cursor += off_t(range.2)
+    }
+    try #require(cursor == end, "WRITE mapping must cover the last whole sector")
     var attr = nb_attr()
     try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
     let reader = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
@@ -423,12 +426,10 @@ private func kernelRMW(_ device: CompletionDevice, _ volume: YuzuNTFSVolume,
     cache.replaceSubrange(eof..<cache.count, with: repeatElement(0, count: cache.count - eof))
     cache.replaceSubrange(Int(offset - start)..<Int(offset - start) + bytes.count, with: bytes)
     for (logical, physical, length) in packer.ranges {
-        let within = physical % sector
-        let count = Int(((within + off_t(length) + sector - 1) / sector) * sector)
-        let cacheOffset = Int(logical - within - start)
+        let cacheOffset = Int(logical - start)
         try cache.withUnsafeBytes {
             try #require(pwrite(device.fd, $0.baseAddress!.advanced(by: cacheOffset),
-                                count, physical - within) == count)
+                                length, physical) == length)
         }
     }
 }
@@ -450,14 +451,14 @@ func residentAppendColdRMWPreservesPrefixAndCompletesObservedRange(readBeforeApp
     // The VM's read map promotes resident.txt before its offset=37,length=9 append.
     if readBeforeAppend { _ = try mapFixture(volume, item, offset: 0, length: 37, id: 5) }
     let mapping = try mapFixture(volume, item, offset: 37, length: 9, id: 6, write: true)
-    #expect(mapping.ranges.first?.0 == 37)
+    #expect(mapping.ranges.first?.0 == 0)
     try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
     #expect(attr.size == 37, "Mapping must not publish rounded allocation as EOF")
     let promoted = try diskDataAttribute(device, path: "/resident.txt")
     #expect(promoted.allocated == 4096 && promoted.data == 37 && promoted.initialized == 37)
     let physical = try #require(mapping.ranges.first?.1)
     var persistedPrefix = [UInt8](repeating: 0, count: 37)
-    try #require(pread(device.fd, &persistedPrefix, 37, physical - 37) == 37)
+    try #require(pread(device.fd, &persistedPrefix, 37, physical) == 37)
     #expect(persistedPrefix == original, "Promotion must be durable before the write mapping returns")
     let payload = Array("P0-append".utf8)
     try kernelRMW(device, volume, item, mapping, offset: 37, bytes: payload)
@@ -486,7 +487,7 @@ func residentAppendColdRMWPreservesPrefixAndCompletesObservedRange(readBeforeApp
     defer { volume.unmount {} }
     let original = try fixtureBytes(device, item, length: 4_194_427)
     let mapping = try mapFixture(volume, item, offset: 4_194_427, length: 9, id: 61, write: true)
-    #expect(mapping.ranges.first?.0 == 4_194_427)
+    #expect(mapping.ranges.first?.0 == 4_194_304)
     let payload = Array("P0-append".utf8)
     try kernelRMW(device, volume, item, mapping, offset: 4_194_427, bytes: payload)
     var calls = 0
@@ -552,9 +553,9 @@ private func diskDataAttribute(_ device: CompletionDevice, path: String) throws
             try #require(Int(field("Initialized size"))))
 }
 
-@Test func sdkPackerAcceptsExactByteCoordinates() throws {
-    // Narrow SDK characterization: the old A2 guard invented a start-alignment
-    // restriction. The real serializer accepts and retains byte coordinates.
+@Test func sdkPackerSerializesByteCoordinatesWithoutValidatingKernelContract() throws {
+    // Serializer acceptance is not a valid device-I/O contract. The VM
+    // corrupted this tuple; production must publish covering whole sectors.
     let selector = NSSelectorFromString("initWithBlockmapFlags:")
     let method = try #require(class_getInstanceMethod(FSExtentPacker.self, selector))
     typealias Initialize = @convention(c) (AnyObject, Selector, UInt) -> AnyObject
@@ -632,4 +633,45 @@ func gapWriteColdRMWNeverZerosInitializedPrefix(offset: off_t) throws {
     #expect(try fixtureBytes(device, item, length: 8193) == expected)
     let sizes = try diskDataAttribute(device, path: "/rmw.bin")
     #expect(sizes.data == 8192 && sizes.initialized == Int(offset) + payload.count)
+}
+
+@Test func appendWriteMappingCoversWholeDeviceSector() throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
+    var found: FSItem?
+    volume.lookupItem(named: FSFileName(string: "resident.txt"), inDirectory: YuzuNTFSItem(ref: 5, parent: 5)) {
+        found = $0; #expect($2 == nil)
+    }
+    let packer = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
+    var failure: (any Error)?
+    volume.blockmapFile(try #require(found), offset: 37, length: 9, flags: [.write],
+                       operationID: FSOperationID(rawValue: 6), packer: packer) { failure = $0 }
+    try #require(failure == nil)
+    #expect(packer.ranges.first?.0 == 0)
+    #expect((try #require(packer.ranges.first?.1)) % 512 == 0)
+    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == 512)
+}
+
+@Test func residentReadMapCanBackAppendWithoutWriteBlockmap() throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
+    var found: FSItem?
+    volume.lookupItem(named: FSFileName(string: "resident.txt"), inDirectory: YuzuNTFSItem(ref: 5, parent: 5)) {
+        found = $0; #expect($2 == nil)
+    }
+    let item = try #require(found as? YuzuNTFSItem)
+    let original = try fixtureBytes(device, item, length: 37)
+    let cached = try mapFixture(volume, item, offset: 0, length: 37, id: 5)
+    #expect(item.inhibitsKernelIO == false && item.operation == nil)
+    // Observed fixed VM callback sequence: READ(0,37) returns DATA(0,512),
+    // then successful completeIO(0,46,unspecified), without a WRITE blockmap.
+    try kernelRMW(device, volume, item, cached, offset: 37, bytes: Array("P0-append".utf8))
+    volume.completeIO(for: item, offset: 0, length: 46, status: nil, flags: [.write],
+                       operationID: .unspecified) { #expect($0 == nil) }
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 47) == original + Array("P0-append".utf8))
 }

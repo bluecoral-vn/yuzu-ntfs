@@ -64,7 +64,13 @@ def mount_image():
         subprocess.run(command + ['-t', fstype, dev, str(mount)], check=True)
     mounted = True
     info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', str(mount)]))
-    if info.get('DeviceNode') != dev or info.get('FilesystemType', '').lower() != fstype or info.get('MountPoint') != str(mount):
+    if fstype == 'yuzuntfs':
+        from p0_guest_acceptance import check_mount_identity
+        try:
+            check_mount_identity(info, subprocess.check_output(['/sbin/mount'], text=True), dev, mount, readonly)
+        except RuntimeError as error:
+            raise SystemExit('mounted backing device/filesystem mismatch: ' + str(error))
+    elif info.get('DeviceNode') != dev or info.get('FilesystemType', '').lower() != fstype or info.get('MountPoint') != str(mount):
         raise SystemExit('mounted backing device/filesystem mismatch; no benchmark writes permitted')
 def remount():
     global mounted
