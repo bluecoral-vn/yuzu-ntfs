@@ -66,6 +66,9 @@ def mount_image():
         command = ['diskutil', 'mount']
         if readonly: command += ['readOnly']
         subprocess.run(command + ['-mountPoint', str(mount), dev], check=True)
+    elif fstype == 'ntfs':
+        if not readonly: raise SystemExit('native NTFS baseline is read-only')
+        subprocess.run(['/sbin/mount_ntfs', '-o', 'rdonly', dev, str(mount)], check=True)
     else:
         command = ['/sbin/mount', '-F']
         if readonly: command += ['-r']
@@ -144,7 +147,8 @@ for run in range(1, 6):
     row(run, 'mount-before-seq-read', remount())
     result, elapsed, cpu = timed(lambda: seq('read', file))
     row(run, 'seq-read-4GiB-F_NOCACHE', result['seconds'], result['mib_s'], cpu)
-    if readonly: continue
+if not readonly:
+  for run in range(1, 6):
     small = work / 'small'; small.mkdir(exist_ok=True)
     payload = bytes((i * 31) % 256 for i in range(4096))
     def smallcopy():

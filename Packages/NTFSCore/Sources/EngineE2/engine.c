@@ -14,8 +14,10 @@ int e2_unaligned_vdl(ntfs_inode_t *);
 int e2_resize(ntfs_inode_t *, uint64_t);
 void e2_force_readonly(ntfs_inode_t *);
 int e2_free_space_ready(ntfs_inode_t *);
+int e2_statfs(ntfs_inode_t *, nb_stat *);
 int e2_writable(ntfs_inode_t *);
 int e2_promote(ntfs_inode_t *);
+int e2_writeback_data(ntfs_inode_t *);
 int e2_query_extents(ntfs_inode_t *, uint64_t, uint64_t, nb_extent *, size_t, size_t *);
 int e2_map(ntfs_inode_t *, uint64_t, uint64_t, int, int, nb_extent *, size_t, size_t *);
 int e2_prepare(ntfs_inode_t *, uint64_t, uint64_t, int);
@@ -169,7 +171,7 @@ int nb_e2_test_mount(const nb_blockdev *dev, int rw, unsigned faults, nb_volume 
     rc = positive(ntfs_mount(&v->bdev, &opts, &v->core));
     /* The worker can fail before TT's post-load RO ladder (which collapses
      * its cause to EROFS), or later. Preserve the producer's terminal cause
-     * in the early case; the successful-mount path joins it below. */
+     * in the early case; late errors remain terminal through statfs/writes. */
     int initialization_error = __atomic_load_n(&v->initialization_error, __ATOMIC_SEQ_CST);
     if (initialization_error) rc = initialization_error;
     if (!rc) {
@@ -177,7 +179,6 @@ int nb_e2_test_mount(const nb_blockdev *dev, int rw, unsigned faults, nb_volume 
         rc = positive(ntfs_volume_root(v->core, &root));
         if (!rc) {
             v->root = ntfs_inode_number(root);
-            rc = e2_free_space_ready(root);
             ntfs_inode_put(root);
         }
     }
@@ -195,6 +196,9 @@ int nb_e2_mount(const nb_blockdev *dev, int rw, nb_volume **out) {
 }
 int e2_fail_free_init(struct ntfs_bdev *dev) {
     return (((nb_volume *)dev->priv)->test_faults & NB_E2_FAIL_FREE_INIT) != 0;
+}
+int e2_delay_free_init(struct ntfs_bdev *dev) {
+    return (((nb_volume *)dev->priv)->test_faults & NB_E2_DELAY_FREE_INIT) != 0;
 }
 int nb_e2_unmount(nb_volume *v) {
     if (!v) return EINVAL;
@@ -281,11 +285,13 @@ static int directory_entry(const struct ntfs_dirent *ent, void *opaque) {
     uint16_t units[255]; size_t len;
     c->err = utf16(ent->name, ent->name_len, units, &len);
     if (c->err) return 1;
-    if (!ent->has_attr) { c->err = EIO; return 1; }
     ntfs_inode_t *inode;
     c->err = positive(ntfs_inode_get(c->v->core, ent->inode_no, &inode));
     if (c->err) return 1;
-    nb_attr attr; attr_out(&ent->attr, c->parent, e2_resident(inode), &attr);
+    struct ntfs_attr core_attr;
+    c->err = positive(ntfs_getattr(inode, &core_attr));
+    if (c->err) { ntfs_inode_put(inode); return 1; }
+    nb_attr attr; attr_out(&core_attr, c->parent, e2_resident(inode), &attr);
     if (e2_reserved(inode)) attr.flags |= NB_READ_ONLY;
     if (e2_unaligned_vdl(inode)) attr.flags |= NB_UNALIGNED_VDL;
     ntfs_inode_put(inode);
@@ -301,7 +307,9 @@ int nb_e2_readdir(nb_volume *v, uint64_t dir, uint64_t cookie, nb_dirent_cb cb, 
     if (rc) return rc;
     struct directory_ctx c = { .v = v, .parent = dir, .cb = cb, .ctx = ctx };
     bool eof;
-    rc = positive(ntfs_readdir(inode, &cookie, true, directory_entry, &c, &eof));
+    /* Resolve each child once, supplying both attributes and private routing
+     * flags in the callback instead of TT's iget plus a second bridge iget. */
+    rc = positive(ntfs_readdir(inode, &cookie, false, directory_entry, &c, &eof));
     ntfs_inode_put(inode);
     return c.err ? c.err : rc;
 }
@@ -350,6 +358,7 @@ int nb_e2_create(nb_volume *v, uint64_t dir, const uint16_t *name, size_t len, u
     if (rc) return rc;
     ntfs_inode_t *parent = NULL, *inode = NULL;
     rc = positive(ntfs_inode_get(v->core, dir, &parent));
+    if (!rc) rc = e2_writable(parent);
     if (!rc && dir != v->root && e2_reserved(parent)) rc = EPERM;
     if (!rc) rc = positive(type == NB_DIR ? ntfs_mkdir(parent, text, 0755, &inode) : ntfs_create(parent, text, 0644, &inode));
     if (!rc && type == NB_FILE) {
@@ -372,6 +381,8 @@ int nb_e2_write(nb_volume *v, uint64_t ref, uint64_t off, const void *buf, size_
     if (ref >> 63) return ENOTSUP;
     ntfs_inode_t *inode; int rc = positive(inode_get(v, ref, &inode));
     if (rc) return rc;
+    rc = e2_writable(inode);
+    if (rc) { ntfs_inode_put(inode); return rc; }
     if (e2_reserved(inode) || e2_sparse(inode)) { ntfs_inode_put(inode); return EPERM; }
     if (len) {
         struct ntfs_attr attr;
@@ -412,7 +423,9 @@ int nb_e2_blockmap(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, int f
     }
     if (for_write && e2_sparse(inode)) { ntfs_inode_put(inode); return EPERM; }
     if (for_write) rc = e2_writable(inode);
-    if (!rc) rc = positive(ntfs_fsync(inode, false));
+    /* Drain buffered data before handing its clusters to KOIO. Metadata is
+     * checkpointed by synchronize/periodic sync, not every map request. */
+    if (!rc) rc = e2_writeback_data(inode);
     if (!rc && !v->bdev.read_only && !e2_reserved(inode) && e2_resident(inode)) {
         rc = e2_promote(inode);
         if (!rc) rc = positive(ntfs_fsync(inode, false));
@@ -431,9 +444,7 @@ int nb_e2_complete_io(nb_volume *v, uint64_t ref, uint64_t off, uint64_t len, in
     if (status || rc) { ntfs_inode_put(inode); return status ? positive(status) : rc; }
     rc = e2_writable(inode);
     if (!rc) rc = e2_finish(inode, off, len);
-    if (!rc) rc = positive(ntfs_fsync(inode, false));
     ntfs_inode_put(inode);
-    if (!rc) rc = positive(ntfs_volume_sync(v->core));
     return rc;
 }
 int nb_e2_sync(nb_volume *v) { return v ? positive(ntfs_volume_sync(v->core)) : EINVAL; }
@@ -473,17 +484,21 @@ static int nb_e2_getattr(nb_volume *v, uint64_t ref, uint64_t parent, nb_attr *o
 }
 static int nb_e2_statfs(nb_volume *v, nb_stat *out) {
     if (!v || !out) return EINVAL;
-    struct ntfs_volume_info info;
-    int rc = positive(ntfs_volume_get_info(v->core, &info));
-    if (!rc) *out = (nb_stat){info.total_clusters, info.free_clusters,
-        info.total_mft_records, info.free_mft_records, info.cluster_size, info.read_only};
+    int error = __atomic_load_n(&v->initialization_error, __ATOMIC_SEQ_CST);
+    if (error) return error;
+    ntfs_inode_t *root = NULL;
+    int rc = positive(ntfs_volume_root(v->core, &root));
+    if (!rc) rc = e2_statfs(root, out);
+    ntfs_inode_put(root);
     return rc;
 }
 static int volume_writable(nb_volume *v) {
     if (!v) return EINVAL;
-    nb_stat s;
-    int rc = nb_e2_statfs(v, &s);
-    return rc ? rc : s.read_only ? EROFS : 0;
+    ntfs_inode_t *root = NULL;
+    int rc = positive(ntfs_volume_root(v->core, &root));
+    if (!rc) rc = e2_writable(root);
+    ntfs_inode_put(root);
+    return rc;
 }
 static int nb_e2_remove(nb_volume *v, uint64_t dir, const uint16_t *name, size_t len) {
     int rc = volume_writable(v);

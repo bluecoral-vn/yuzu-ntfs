@@ -15,6 +15,7 @@
 #undef ntfs_bdev_write
 #include <ntfscore.h>
 #include "engine_e2.h"
+#include <unistd.h>
 int e2_allocate_non_sparse(struct ntfs_inode *, s64);
 int e2_grow_non_sparse(struct ntfs_inode *, s64);
 
@@ -35,9 +36,28 @@ void e2_force_readonly(ntfs_inode_t *h)
 int e2_free_space_ready(ntfs_inode_t *h)
 {
     struct ntfs_volume *vol = NTFS_I((struct inode *)h)->vol;
-    flush_work(&vol->precalc_work);
+    /* No caller can enter TT's unbounded allocation wait. A slow/background
+     * bitmap scan gets a bounded grace, then EAGAIN without mutation. */
+    for (unsigned i = 0; !NVolFreeClusterKnown(vol) && i < 1000; ++i)
+        usleep(1000);
+    if (!NVolFreeClusterKnown(vol)) return EAGAIN;
     s64 free = atomic64_read(&vol->free_clusters);
     return free < 0 ? (int)-free : 0;
+}
+
+int e2_statfs(ntfs_inode_t *h, nb_stat *out)
+{
+    struct inode *vi = (struct inode *)h;
+    struct ntfs_volume *vol = NTFS_I(vi)->vol;
+    int known = NVolFreeClusterKnown(vol);
+    s64 free = known ? atomic64_read(&vol->free_clusters) : 0;
+    if (free < 0) return (int)-free;
+    free = max_t(s64, 0, free - atomic64_read(&vol->dirty_clusters));
+    *out = (nb_stat){ .total_blocks = vol->nr_clusters, .free_blocks = free,
+        .total_files = i_size_read(vol->mft_ino) >> vol->mft_record_size_bits,
+        .free_files = atomic64_read(&vol->free_mft_records),
+        .block_size = vol->cluster_size, .read_only = IS_RDONLY(vi) };
+    return 0;
 }
 
 /* Reserved records and every direct $Extend child are diagnostic-read-only.
@@ -75,7 +95,15 @@ int e2_invalidate(ntfs_inode_t *h, uint64_t off, uint64_t len)
 int e2_writable(ntfs_inode_t *h)
 {
     struct inode *vi = (struct inode *)h;
+    int ready = e2_free_space_ready(h);
+    if (ready) return ready;
     return IS_RDONLY(vi) || NVolShutdown(NTFS_I(vi)->vol) ? EROFS : 0;
+}
+
+int e2_writeback_data(ntfs_inode_t *h)
+{
+    int err = filemap_write_and_wait(((struct inode *)h)->i_mapping);
+    return err < 0 ? -err : err;
 }
 
 /* T7-R3/R4: empty new files and first data access on RW mounts must be
@@ -126,6 +154,8 @@ int e2_resize(ntfs_inode_t *h, uint64_t size)
 {
     struct inode *vi = (struct inode *)h;
     struct ntfs_inode *ni = NTFS_I(vi);
+    int ready = e2_writable(h);
+    if (ready) return ready;
     if (size <= (uint64_t)ni->data_size) return -ntfs_truncate(h, size);
     int err = e2_promote(h);
     if (err) return err;
@@ -167,7 +197,17 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len, int fail_after_alloc
     if (off + len > (uint64_t)ni->allocated_size) {
         mutex_lock(&ni->mrec_lock);
         /* Keep EOF/VDL unchanged even if any allocation/search step fails. */
-        err = e2_allocate_non_sparse(ni, off + len);
+        uint64_t needed = off + len, reservation = needed;
+        /* Reserve ahead once contiguous growth reaches streaming size, even
+         * when the kernel splits the stream into small mapping upcalls. */
+        if (needed >= 1024 * 1024 && off <= (uint64_t)ni->allocated_size &&
+            needed <= INT64_MAX - 8 * 1024 * 1024)
+            reservation = round_up(needed, UINT64_C(8) * 1024 * 1024);
+        err = e2_allocate_non_sparse(ni, reservation);
+        /* Speculation must not turn an otherwise satisfiable write into
+         * ENOSPC. The expansion primitive rolls back failed reservations. */
+        if (err == -ENOSPC && reservation != needed)
+            err = e2_allocate_non_sparse(ni, needed);
         if (!err && fail_after_allocation) err = -ENOMEM;
         mutex_unlock(&ni->mrec_lock);
         if (err) goto done;

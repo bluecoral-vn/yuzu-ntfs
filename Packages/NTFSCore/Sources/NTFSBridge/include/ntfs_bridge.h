@@ -63,6 +63,12 @@ int nb_sync(nb_volume *v);
  *   remain supported. FSKit inhibits KOIO for them, as for compressed files.
  * - Ordinary file growth uses HOLES_NO allocation, preserves non-sparse state,
  *   and leaves VDL unchanged. Mapping preallocates without ever changing EOF.
+ *   Streaming-sized contiguous growth may reserve ahead without changing
+ *   EOF/VDL; insufficient speculative space falls back to exact allocation.
+ *   statfs conservatively reports zero free clusters until its background
+ *   scan is known. Mutations wait at most a bounded grace and return EAGAIN
+ *   without entering the core allocator if initialization remains pending;
+ *   terminal initialization errors retain their original errno.
  * - Safe sparse materialization is P1: detached lcnalloc -> zero/flush ->
  *   runlist insertion/mapping-pair publication. The old materialization code
  *   is guarded/unreachable through this P0 interface, not a crash-safe claim.
@@ -93,9 +99,10 @@ int nb_sync(nb_volume *v);
  *   existing bytes and EOF. This can allocate on a resident read. RO resident
  *   mappings still return ENOTSUP; use buffered reads without any mutation.
  * - Successful write completion raises initialized_size and size to their
- *   respective max(current, off+len), persists metadata, and invalidates cached
- *   data. If off exceeds initialized_size, it first zeroes the gap (sparse holes
- *   may remain holes) and flushes payload/gap BEFORE publishing the new VDL.
+ *   respective max(current, off+len), dirties metadata, and invalidates cached
+ *   data. D13 checkpoints metadata every 5 s in the mounted adapter and on
+ *   explicit sync/eject. If off exceeds initialized_size, completion first
+ *   zeroes the gap and flushes payload/gap BEFORE publishing the new VDL.
  *   Completion also zeroes the remainder of its partial device block before
  *   VDL publication; exact EOF/VDL are not rounded. This retains T7-R5 below.
  *   T7-R5 P0 ordering: apply delivered completions in arrival order; never

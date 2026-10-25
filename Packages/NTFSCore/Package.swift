@@ -30,6 +30,7 @@ let package = Package(
         // Compile the actual app-extension glue in a plain Swift Testing host.
         // Source symlinks retain Module/ as the single implementation owner.
         .target(name: "FSKitGlue", dependencies: ["NTFSProbe", "NTFSBridge", "EngineE2"]),
+        .executableTarget(name: "BridgePerf", dependencies: ["NTFSBridge", "EngineE2"]),
         .testTarget(name: "FSKitGlueTests", dependencies: ["FSKitGlue", "NTFSBridge", "EngineE2"]),
         .testTarget(name: "BridgeConformanceTests", dependencies: ["NTFSBridge", "EngineE2"])
     ]

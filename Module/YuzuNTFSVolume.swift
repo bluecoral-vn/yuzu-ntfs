@@ -28,6 +28,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     let api: nb_engine
     private var core: OpaquePointer?
     private var terminalReadOnly = false
+    private var checkpointTimer: DispatchSourceTimer?
     // P0-only fault injection; remove in P1. No container escape or engine ABI change.
     var forceReadOnlyURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("YuzuNTFS/p0-force-ro")
@@ -55,8 +56,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         self.api = api
         super.init(volumeID: FSVolume.Identifier(uuid: boot.volumeUUID), volumeName: FSFileName(string: "Yuzu-NTFS"))
     }
-    deinit { if let core { _ = api.nb_dispose!(core) } }
+    deinit { checkpointTimer?.cancel(); if let core { _ = api.nb_dispose!(core) } }
     private func discardCore() {
+        checkpointTimer?.cancel()
+        checkpointTimer = nil
         if let core { _ = api.nb_dispose!(core); self.core = nil }
         items.removeAll()
         device.metadataActive = false
@@ -104,7 +107,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         try check(api.nb_getattr!(core, item.ref, item.parent, &attr))
         return try attributes(attr, item: item)
     }
-    private func attributes(_ attr: nb_attr, item supplied: YuzuNTFSItem? = nil) throws -> FSItem.Attributes {
+    private func attributes(_ attr: nb_attr, item supplied: YuzuNTFSItem? = nil, writableSnapshot: Bool? = nil) throws -> FSItem.Attributes {
         let result = FSItem.Attributes()
         result.type = attr.type == NB_DIR ? .directory : attr.type == NB_SYMLINK ? .symlink : .file
         result.mode = attr.type == NB_DIR ? 0o755 : 0o644
@@ -114,7 +117,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         result.fileID = try id(attr.ref); result.parentID = try id(attr.parent_ref)
         result.flags = attr.ntfs_attrs & 2 != 0 ? UInt32(UF_HIDDEN) : 0
         let item = supplied ?? items.existing(ref: attr.ref)
-        let eligible = item?.inhibitsKernelIO ?? (attr.type != NB_FILE || Self.inhibitsIO(flags: attr.flags, writable: effectivelyWritable()))
+        let eligible = item?.inhibitsKernelIO ?? (attr.type != NB_FILE || Self.inhibitsIO(flags: attr.flags, writable: writableSnapshot ?? effectivelyWritable()))
         item?.inhibitsKernelIO = eligible
         result.inhibitKernelOffloadedIO = eligible
         result.modifyTime = time(attr.mtime); result.changeTime = time(attr.ctime)
@@ -207,10 +210,33 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         } catch { reply(nil, error) }
     }
     func mount(options: FSTaskOptions, replyHandler reply: @escaping ((any Error)?) -> Void) {
-        serial { device.metadataActive = true }; reply(nil)
+        serial {
+            device.metadataActive = true
+            guard writable, checkpointTimer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.bluecoral.yuzuntfs.checkpoint"))
+            timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .milliseconds(100))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.serial {
+                    guard let core = self.core, self.effectivelyWritable() else { return }
+                    let error = self.api.nb_sync!(core)
+                    if error != 0 {
+                        self.terminalReadOnly = true
+                        Self.p0Log.error("periodic checkpoint failed errno=\(error)")
+                    }
+                }
+            }
+            checkpointTimer = timer
+            timer.resume()
+        }
+        reply(nil)
     }
     func unmount(replyHandler reply: @escaping () -> Void) {
-        serial { if let core { _ = api.nb_sync!(core); _ = api.nb_unmount!(core); self.core = nil } }
+        serial {
+            checkpointTimer?.cancel()
+            checkpointTimer = nil
+            if let core { _ = api.nb_sync!(core); _ = api.nb_unmount!(core); self.core = nil }
+        }
         reply()
     }
     func deactivate(options: FSDeactivateOptions, replyHandler reply: @escaping ((any Error)?) -> Void) { serial { discardCore() }; reply(nil) }
@@ -311,7 +337,9 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                         if !(try packer.packEntry(name: FSFileName(string: ".."), itemType: .directory, itemID: id(item.parent), nextCookie: FSDirectoryCookie(rawValue: 2), attributes: nil)) { return item.version }
                     }
                 }
-                let context = Enumeration(volume: self, packer: packer, attributes: request != nil)
+                // One admission snapshot per serialized batch, not a statfs
+                // and fault-hook filesystem lookup for every child.
+                let context = Enumeration(volume: self, packer: packer, attributes: request != nil, writable: effectivelyWritable())
                 try check(api.nb_readdir!(core, item.ref, cookie.rawValue > 2 ? cookie.rawValue - 2 : 0, { opaque, name, count, attr, next in
                     let c = Unmanaged<Enumeration>.fromOpaque(opaque!).takeUnretainedValue()
                     let a = attr!.pointee
@@ -319,7 +347,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     do {
                         let identifier = try c.volume.id(a.ref)
                         let cookie = try YuzuNTFSBoundary.adding(next, 2)
-                        let attributes = c.attributes ? try c.volume.attributes(a) : nil
+                        let attributes = c.attributes ? try c.volume.attributes(a, writableSnapshot: c.writable) : nil
                         return c.packer.packEntry(name: FSFileName(string: text), itemType: a.type == NB_DIR ? .directory : .file,
                             itemID: identifier, nextCookie: FSDirectoryCookie(rawValue: cookie), attributes: attributes) ? 0 : 1
                     } catch { c.error = error; return 1 }
@@ -332,9 +360,11 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     private final class Enumeration {
         let volume: YuzuNTFSVolume, packer: FSDirectoryEntryPacker
-        let attributes: Bool
+        let attributes: Bool, writable: Bool
         var error: (any Error)?
-        init(volume: YuzuNTFSVolume, packer: FSDirectoryEntryPacker, attributes: Bool) { self.volume = volume; self.packer = packer; self.attributes = attributes }
+        init(volume: YuzuNTFSVolume, packer: FSDirectoryEntryPacker, attributes: Bool, writable: Bool) {
+            self.volume = volume; self.packer = packer; self.attributes = attributes; self.writable = writable
+        }
     }
     func read(from item: FSItem, at offset: off_t, length: Int, into buffer: FSMutableFileDataBuffer, replyHandler reply: @escaping (Int, (any Error)?) -> Void) {
         Self.p0Log.info("bufferedRead offset=\(offset) length=\(length)")

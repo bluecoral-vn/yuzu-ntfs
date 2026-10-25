@@ -79,20 +79,43 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
             return 0
         } catch { return YuzuNTFSBoundary.errorCode(error) }
     }
+    static func overlappingMetadataSectors<Extents: Collection>(_ cached: Set<Int64>, _ extents: Extents,
+                                                               sector: UInt64) throws -> Set<Int64> where Extents.Element == nb_extent {
+        guard sector > 0 else { throw POSIXError(.EINVAL) }
+        var touched = Set<Int64>()
+        for extent in extents where extent.kind != NB_EXT_HOLE && extent.length != 0 {
+            let end = try YuzuNTFSBoundary.adding(extent.physical, extent.length)
+            let first = extent.physical / sector * sector
+            let last = (end - 1) / sector * sector
+            let sectors = (last - first) / sector + 1
+            if sectors < UInt64(cached.count) {
+                // Small I/O must not scan all metadata accumulated by the
+                // volume: that made create/copy O(number of files squared).
+                var position = first
+                while true {
+                    let base = try YuzuNTFSBoundary.offset(position)
+                    if cached.contains(base) { touched.insert(base) }
+                    if position == last { break }
+                    position += sector
+                }
+            } else {
+                // Large sequential extents are cheaper to intersect with the
+                // small metadata set than to visit every data sector.
+                for base in cached {
+                    guard let start = UInt64(exactly: base) else { throw POSIXError(.EIO) }
+                    let sectorEnd = try YuzuNTFSBoundary.adding(start, sector)
+                    if start < end && sectorEnd > extent.physical { touched.insert(base) }
+                }
+            }
+        }
+        return touched
+    }
     /// Purge only engine-touched sectors before handing them to kernel data I/O.
     func purge<Extents: Collection>(_ extents: Extents) throws where Extents.Element == nb_extent {
         lock.lock(); defer { lock.unlock() }
         guard metadataActive else { return }
         let sector = UInt64(geometry.sector)
-        var touched: [Int64] = []
-        for base in cached {
-            guard let start = UInt64(exactly: base) else { throw POSIXError(.EIO) }
-            let end = try YuzuNTFSBoundary.adding(start, sector)
-            for extent in extents where extent.kind != NB_EXT_HOLE {
-                let extentEnd = try YuzuNTFSBoundary.adding(extent.physical, extent.length)
-                if start < extentEnd && end > extent.physical { touched.append(base); break }
-            }
-        }
+        let touched = try Self.overlappingMetadataSectors(cached, extents, sector: sector)
         guard !touched.isEmpty else { return }
         try resource.metadataFlush()
         try resource.metadataPurge(touched.map { FSMetadataRange(offset: $0, segmentLength: sector, segmentCount: 1) })

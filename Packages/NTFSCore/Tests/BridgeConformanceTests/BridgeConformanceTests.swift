@@ -52,6 +52,7 @@ private final class DeviceIO {
     private let lock = NSLock()
     private var failingReads = false
     private var writes = 0
+    private var flushes = 0
     private var failingNextWrite = false
     init(fd: Int32) { self.fd = fd }
     var failReads: Bool {
@@ -63,6 +64,8 @@ private final class DeviceIO {
         set { lock.withLock { failingNextWrite = newValue } }
     }
     var writeCount: Int { lock.withLock { writes } }
+    var flushCount: Int { lock.withLock { flushes } }
+    func beginFlush() { lock.withLock { flushes += 1 } }
     func beginWrite() -> Bool {
         lock.withLock {
             writes += 1
@@ -114,8 +117,9 @@ private final class Image {
             }
             return 0
         }, flush: { ctx in
-            let fd = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue().fd
-            return fsync(fd) == 0 ? 0 : errno
+            let io = Unmanaged<DeviceIO>.fromOpaque(ctx!).takeUnretainedValue()
+            io.beginFlush()
+            return fsync(io.fd) == 0 ? 0 : errno
         })
     }
     deinit { close(fd); if temporary { try? FileManager.default.removeItem(at: url) } }
@@ -217,6 +221,60 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
+    @Test(arguments: Engine.allCases) func sequentialMappingsReserveAheadWithoutPublishingSizes(engine: Engine) throws {
+        let mounted = try Mounted(engine, "basic-512", write: true)
+        let name = Array("sequential.bin".utf16)
+        var attr = nb_attr(), count = 0
+        try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+        var extent = nb_extent()
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, 1024 * 1024, 1, &extent, 1, &count) == 0)
+        try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
+        #expect(attr.size == 0)
+        #expect(attr.alloc_size >= 8 * 1024 * 1024)
+        let allocation = attr.alloc_size
+        let before = mounted.image.io.flushCount
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 1024 * 1024, 1024 * 1024, 1, &extent, 1, &count) == 0)
+        #expect(mounted.image.io.flushCount == before)
+        try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
+        #expect(attr.alloc_size == allocation)
+        #expect(attr.size == 0)
+        #expect(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 1024 * 1024, EIO, 1) == EIO)
+        #expect(try mounted.lookup("/sequential.bin").size == 0)
+    }
+
+    @Test(arguments: Engine.allCases) func smallSequentialUpcallsOnLargeFilesReserveAhead(engine: Engine) throws {
+        let mounted = try Mounted(engine, "basic-512", write: true)
+        let name = Array("short-upcalls.bin".utf16)
+        var attr = nb_attr(), count = 0
+        try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+        try #require(mounted.api.nb_truncate!(mounted.volume, attr.ref, 1024 * 1024) == 0)
+        var extent = nb_extent()
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 1024 * 1024, 4096, 1, &extent, 1, &count) == 0)
+        try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
+        #expect(attr.alloc_size >= 8 * 1024 * 1024)
+        #expect(attr.size == 1024 * 1024)
+    }
+
+    @Test(arguments: Engine.allCases) func completionDefersMetadataCheckpointButFlushesPayload(engine: Engine) throws {
+        let mounted = try Mounted(engine, "basic-512", write: true)
+        let name = Array("deferred.bin".utf16)
+        var attr = nb_attr(), count = 0
+        try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+        var extent = nb_extent()
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, 4096, 1, &extent, 1, &count) == 0)
+        let payload = Data(repeating: 0x71, count: 4096)
+        try #require(payload.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(extent.physical)) } == payload.count)
+        let before = mounted.image.io.flushCount
+        try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 4096, 0, 1) == 0)
+        #expect(mounted.image.io.flushCount - before == 1)
+        #expect(try mounted.lookup("/deferred.bin").size == 4096)
+        try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+        try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
+        mounted.volume = nil
+        try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
+        #expect(try mounted.read(mounted.lookup("/deferred.bin")) == payload)
+    }
+
     @Test func shortRawCompletionZerosPartialBlockBeforeVDLPublication() throws {
         let m = try Mounted(.e2, "basic-512", write: true)
         let name = Array("partial-block.bin".utf16)
@@ -308,16 +366,44 @@ struct BridgeConformanceTests {
         _ = m.api.nb_dispose!(m.volume); m.volume = nil
         #expect(m.image.io.writeCount == before)
     }
-    @Test func freeSpaceInitializationFailureTerminatesMount() throws {
+    @Test func freeSpaceInitializationFailureRemainsTerminal() throws {
         let image = try Image("basic-512", copy: true)
         var volume: OpaquePointer?
         let api = try Engine.e2.api()
         let start = Date()
         let result = nb_e2_test_mount(&image.dev, 1, UInt32(NB_E2_FAIL_FREE_INIT), &volume)
         defer { if let volume { _ = api.nb_unmount!(volume) } }
-        #expect(result == ENOMEM)
-        #expect(volume == nil)
+        if result == 0 {
+            var state = nb_stat(), error: Int32 = 0
+            repeat {
+                error = api.nb_statfs!(volume, &state)
+                if error == 0 { Thread.sleep(forTimeInterval: 0.001) }
+            } while error == 0 && Date().timeIntervalSince(start) < 5
+            #expect(error == ENOMEM)
+            let name = Array("must-not-create".utf16)
+            var attr = nb_attr()
+            #expect(api.nb_create!(volume, 5, name, name.count, NB_FILE, &attr) == ENOMEM)
+        } else {
+            #expect(result == ENOMEM)
+            #expect(volume == nil)
+        }
         #expect(Date().timeIntervalSince(start) < 5)
+    }
+
+    @Test func mountAndStatfsDoNotJoinBackgroundBitmapScan() throws {
+        let image = try Image("basic-512", copy: true)
+        var volume: OpaquePointer?
+        let api = try Engine.e2.api()
+        let start = Date()
+        try #require(nb_e2_test_mount(&image.dev, 1, UInt32(NB_E2_DELAY_FREE_INIT), &volume) == 0)
+        defer { if let volume { _ = api.nb_unmount!(volume) } }
+        var state = nb_stat()
+        try #require(api.nb_statfs!(volume, &state) == 0)
+        #expect(Date().timeIntervalSince(start) < 0.25)
+        #expect(state.free_blocks == 0) // Conservative estimate, never a false capacity promise.
+        Thread.sleep(forTimeInterval: 0.4)
+        try #require(api.nb_statfs!(volume, &state) == 0)
+        #expect(state.free_blocks > 0)
     }
     @Test func failedCreatePromotionRollsBackNamespace() throws {
         let m = try Mounted(.e2, "basic-512", write: true)

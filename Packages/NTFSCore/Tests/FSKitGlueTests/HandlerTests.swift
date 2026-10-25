@@ -29,6 +29,10 @@ private final class HandlerCore {
     var completedStatus: Int32?
     var mappingPhysical: UInt64?
     var directoryCookie: UInt64?
+    private let checkpointLock = NSLock()
+    private var checkpoints = 0
+    var checkpointCount: Int { checkpointLock.withLock { checkpoints } }
+    func checkpoint() { checkpointLock.withLock { checkpoints += 1 } }
     static func state(_ pointer: OpaquePointer?) -> HandlerCore { Unmanaged<HandlerCore>.fromOpaque(UnsafeRawPointer(pointer!)).takeUnretainedValue() }
     var api: nb_engine {
         var api = nb_engine()
@@ -40,7 +44,7 @@ private final class HandlerCore {
         api.nb_root_ref = { _ in 5 }
         api.nb_hold = { core, _ in let s = HandlerCore.state(core); return s.failHold ? ENOMEM : s.failure }
         api.nb_release = { _, _ in 0 }
-        api.nb_sync = { core in HandlerCore.state(core).failure }
+        api.nb_sync = { core in let s = HandlerCore.state(core); s.checkpoint(); return s.failure }
         api.nb_unmount = { core in HandlerCore.state(core).closes += 1; return 0 }
         api.nb_dispose = { core in HandlerCore.state(core).closes += 1; return 0 }
         api.nb_query_extents = { core, _, offset, length, buffer, capacity, count in
@@ -103,6 +107,18 @@ private final class ReplyOnce {
     var error: (any Error)?
     func accept(_ error: (any Error)?) { calls += 1; self.error = error }
     func assertOnce() { #expect(calls == 1) }
+}
+
+@Test func writableMountCheckpointsPeriodicallyAndStopsAtUnmount() throws {
+    let core = HandlerCore(), volume = try core.volume()
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    volume.mount(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { error in #expect(error == nil) }
+    Thread.sleep(forTimeInterval: 5.3)
+    #expect(core.checkpointCount >= 1)
+    volume.unmount {}
+    let count = core.checkpointCount
+    Thread.sleep(forTimeInterval: 0.1)
+    #expect(core.checkpointCount == count)
 }
 
 @Test func effectiveReadOnlyRejectsWriteOpenAndInhibitsResidentPublication() throws {

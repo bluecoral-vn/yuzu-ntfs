@@ -2,6 +2,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <ntfsport/bdev.h>
+#include <unistd.h>
 static _Thread_local size_t fail_ra_size;
 static void *e2_kzalloc(size_t size, gfp_t flags)
 {
@@ -16,10 +17,12 @@ static void e2_precalc_free_clusters(struct work_struct *work);
 #include "../../../../upstream/ttntfs/core/ntfs/super.c"
 #undef kzalloc
 int e2_fail_free_init(struct ntfs_bdev *);
+int e2_delay_free_init(struct ntfs_bdev *);
 void e2_report_initialization_error(struct ntfs_bdev *, int);
 static void e2_precalc_free_clusters(struct work_struct *work)
 {
     struct ntfs_volume *vol = container_of(work, struct ntfs_volume, precalc_work);
+    if (e2_delay_free_init(vol->sb->s_bdev)) usleep(300000);
     if (e2_fail_free_init(vol->sb->s_bdev)) fail_ra_size = sizeof(struct file_ra_state);
     precalc_free_clusters(work);
     fail_ra_size = 0;

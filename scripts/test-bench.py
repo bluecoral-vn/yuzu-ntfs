@@ -17,6 +17,27 @@ SCRIPT = pathlib.Path(__file__).with_name('bench.sh')
 PREFIX = SCRIPT.read_text().split("<<'PY'\n", 1)[1].split('def checked_device():', 1)[0]
 
 class BenchPreflight(unittest.TestCase):
+    def test_five_sequential_samples_finish_before_metadata_workloads(self):
+        source = SCRIPT.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        loops = [node for node in ast.parse(source).body if isinstance(node, ast.For)]
+        sequential = next(node for node in loops if 'seq-write-4GiB-F_NOCACHE' in ast.unparse(node))
+        self.assertNotIn('smallcopy', ast.unparse(sequential))
+        self.assertEqual(ast.unparse(sequential.iter), 'range(1, 6)')
+
+    def test_native_ntfs_baseline_uses_explicit_read_only_kernel_driver(self):
+        source = SCRIPT.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'mount_image')
+        calls = []
+        info = {'DeviceNode': '/dev/test', 'FilesystemType': 'ntfs', 'MountPoint': '/safe/mount'}
+        fake = SimpleNamespace(run=lambda command, **kwargs: calls.append(command),
+                               check_output=lambda *args, **kwargs: plistlib.dumps(info))
+        namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='ntfs', readonly=True,
+                         mount=pathlib.Path('/safe/mount'), subprocess=fake, plistlib=plistlib,
+                         mounted=False, time=time)
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
+        namespace['mount_image']()
+        self.assertEqual(calls, [['/sbin/mount_ntfs', '-o', 'rdonly', '/dev/test', '/safe/mount']])
+
     def test_termination_during_parent_setup_never_releases_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             allow = pathlib.Path(directory) / 'allow'
