@@ -911,3 +911,65 @@ Host launchctl service was removed; an immediate delete raced shutdown, then
 Lume cleared its stale run lock and **deleted the clone successfully**.
 The fresh host payload share was removed; goldens and evidence were retained.
 No push was performed.
+
+### Headless correction — byte-shaped append blockmaps (2026-10-25)
+
+The first failure is now traced to the **A2 extent-start alignment guard in
+`YuzuNTFSVolume.blockmapFile`**, not resident promotion or successful-completion
+range validation. In `guest-artifacts.zip`, the first run's `rw-callbacks.log`
+lines 5–9 show read mapping `(offset: 0, length: 37)` followed by two append
+mapping requests `(37, 9)` and completions `(0, 46)`. The read mapping promotes
+the resident inode on this writable mount. `module-log.log:891–898` reports
+blockmap reply **22**, operation IDs **6/7**, before endIO reply **22** with
+**ioStatus 22**, operation ID **0**. `acceptance-observation.log:102280–102282`
+places the user-visible error at `resident.flush()`, before `os.fsync`.
+
+The bridge accepts byte ranges and returns the requested logical/physical
+offsets. Consequently `[37,46)` reached the old guard with logical offset 37
+and physical offset `LCN * clusterSize + 37`; both fail sector-start alignment.
+The existing partial-end exception already allowed an end beyond old EOF for
+writes, so it was **not** the rejected branch. Real-handler regressions against
+the unmodified guard reproduced EINVAL for both resident append paths (with
+and without the preceding read promotion) and a non-resident append at EOF
+4194427. A 1000003-byte write separately exposed its non-block-sized packed tail.
+Focused RED: artifact 889; focused GREEN: artifact 891.
+
+Write mappings now prepare and pack the covering full device sectors:
+`[37,46)` maps `[0,512)` and `[0,1000003)` maps `[0,1000448)`. This retains the
+aligned-extent guard rather than weakening it. The macOS 27 SDK's
+`FSVolumeExtent.h:67–71` explicitly permits `.data` extents in
+`[EOF, allocated space]`, because the kernel tracks EOF; it does not require
+the requested byte range to be sector-aligned. Rounding uses checked arithmetic.
+Only the unchanged completion byte range advances EOF/VDL, never the padded
+mapping, and no callback wait or additional reply is introduced.
+
+The observed `(0,46)` completion is valid even though the map requested `(37,9)`;
+it need not exactly match a mapping range. Its failed status 22 is propagated
+by the bridge, not invented by T1–T3 validation. No size-setattr failure appears
+before the first blockmap error. The later synchronize error at
+`module-log.log:900` is not evidence that synchronize originated the append
+failure; the saved logs do not identify the lower-level source of that later
+sync error independently.
+
+Tests use the actual volume handlers, E2 bridge and copied disposable image,
+with only the SDK packer/resource boundary supplied in process. They perform
+physical payload writes, complete the observed prefix range, synchronize/close,
+and offline-remount readback including exact EOF. They also retain the existing
+T5-R2 gap/partial-tail zeroing and R-R1 outstanding-write/read-map interleavings.
+The 1000003-byte case is a **headless regression**, not a claim the unreached VM
+copy ran. The VM acceptance verdict remains NO-GO pending a new authorized VM
+run; no host mount, attachment, installation or push is part of this correction.
+
+Final headless verification: **17 probe/policy + 39 glue + 30 bridge tests**
+passed in each of plain (322.086 s bridge, artifact 894), ASan (377.449 s
+bridge, `build/qc-runs/20261025-vmrw/headless-asan.log`), and explicitly linked
+UBSan (364.305 s bridge, `build/qc-runs/20261025-vmrw/headless-ubsan.log`).
+`otool -L` also confirmed `libclang_rt.ubsan_osx_dynamic.dylib` on the bridge
+test executable. No sanitizer diagnostics were reported. The first ASan
+tool invocation was interrupted by a harness timeout after probe/glue passed;
+it was not counted as a green full run. The complete captured-output retry
+exited 0. The existing SDK completion-optionality warning remains.
+
+All six Python suites passed **33 tests** using
+`for file in scripts/test-*.py; do python3 "$file" || exit; done`
+(bench 4, install 4, phases 1, readonly 6, policy/ops 16, seqio 2).

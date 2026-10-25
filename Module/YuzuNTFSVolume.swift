@@ -382,9 +382,24 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                     // the latch. Its already-published inhibition stays fixed.
                     if attr.flags & UInt32(NB_RESIDENT | NB_UNALIGNED_VDL) != 0 { throw POSIXError(.EROFS) }
                 }
+                let sector = UInt64(device.blockdev.sector_size)
+                guard sector > 0 else { throw POSIXError(.EINVAL) }
+                var mappingOffset = UInt64(offset), mappingLength = UInt64(length)
+                if flags.contains(.write) && length > 0 {
+                    // FSKit can request a byte append (e.g. [37,46)), not
+                    // sector-aligned I/O. Supply the covering allocated blocks;
+                    // FSVolumeExtent.h permits .data beyond EOF (lines 69–71).
+                    // Only completeIO's original byte range may advance EOF/VDL.
+                    let end = mappingOffset + mappingLength
+                    let tail = end % sector
+                    let alignedEnd = try YuzuNTFSBoundary.adding(end, tail == 0 ? 0 : sector - tail)
+                    _ = try YuzuNTFSBoundary.offset(alignedEnd)
+                    mappingOffset -= mappingOffset % sector
+                    mappingLength = alignedEnd - mappingOffset
+                }
                 // io remains locked: no write can acquire/release a lease
                 // between this decision and partial-VDL mapping/zeroing.
-                try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: UInt64(offset), length: UInt64(length),
+                try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: mappingOffset, length: mappingLength,
                                        write: flags.contains(.write), preservingWrite: item.operation != nil) { extents in
                     try device.purge(extents)
                     if leasesWrite { item.extents.append(contentsOf: extents) }
@@ -392,8 +407,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                         let end = try YuzuNTFSBoundary.adding(extent.logical, extent.length)
                         _ = try YuzuNTFSBoundary.offset(end)
                         _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, extent.length))
-                        let sector = UInt64(device.blockdev.sector_size)
-                        guard sector > 0, extent.logical % sector == 0,
+                        guard extent.logical % sector == 0,
                               extent.kind == NB_EXT_HOLE || extent.physical % sector == 0 else { throw POSIXError(.EINVAL) }
                         if end % sector != 0 {
                             var attr = nb_attr()

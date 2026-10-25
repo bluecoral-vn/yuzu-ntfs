@@ -197,7 +197,7 @@ private func mappedFixture(_ device: CompletionDevice, writable: Bool) throws ->
 }
 private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: off_t,
                         length: Int, id: Int, write: Bool = false,
-                        expectedType: FSExtentType = .data) throws -> ReadMappingPacker {
+                        expectedType: FSExtentType = .data, mappedLength: Int? = nil) throws -> ReadMappingPacker {
     let packer = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
     var calls = 0, failure: (any Error)?
     volume.blockmapFile(item, offset: offset, length: length, flags: write ? [.write] : [.read],
@@ -206,7 +206,7 @@ private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: 
     }
     #expect(calls == 1)
     try #require(failure == nil)
-    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == length)
+    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == (mappedLength ?? length))
     #expect(packer.types.allSatisfy { $0 == expectedType })
     return packer
 }
@@ -358,4 +358,118 @@ func readMappingWithoutWriteLeasePadsPartialVDLTail(readOffset: off_t) throws {
     #expect(Array(raw.prefix(37)) == [UInt8](repeating: 0x41, count: 37))
     #expect(raw.dropFirst(37).allSatisfy { $0 == 0 })
     #expect(item.operation == nil)
+}
+
+private func fixtureBytes(_ device: CompletionDevice, _ item: YuzuNTFSItem, length: Int) throws -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: length), got = 0
+    try #require(nb_engine_e2()!.pointee.nb_read!(device.core, item.ref, 0, &bytes, bytes.count, &got) == 0)
+    return Array(bytes.prefix(got))
+}
+
+private func landPayload(_ device: CompletionDevice, _ packer: ReadMappingPacker,
+                         offset: off_t, bytes: [UInt8]) throws {
+    var written = 0
+    for (logical, physical, length) in packer.ranges {
+        #expect(logical % 512 == 0 && physical % 512 == 0 && length % 512 == 0)
+        let first = max(logical, offset), end = min(logical + off_t(length), offset + off_t(bytes.count))
+        if first < end {
+            let start = Int(first - offset), count = Int(end - first)
+            try bytes.withUnsafeBytes {
+                try #require(pwrite(device.fd, $0.baseAddress!.advanced(by: start), count,
+                                    physical + first - logical) == count)
+            }
+            written += count
+        }
+    }
+    #expect(written == bytes.count)
+}
+
+@Test(arguments: [false, true])
+func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppend: Bool) throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
+    var found: FSItem?
+    volume.lookupItem(named: FSFileName(string: "resident.txt"), inDirectory: YuzuNTFSItem(ref: 5, parent: 5)) {
+        found = $0; #expect($2 == nil)
+    }
+    let item = try #require(found as? YuzuNTFSItem)
+    let original = try fixtureBytes(device, item, length: 37)
+    var attr = nb_attr()
+    try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
+    #expect(attr.flags & UInt32(NB_RESIDENT) != 0)
+    // The VM's read map promotes resident.txt before its offset=37,length=9 append.
+    if readBeforeAppend { _ = try mapFixture(volume, item, offset: 0, length: 37, id: 5) }
+    let mapping = try mapFixture(volume, item, offset: 37, length: 9, id: 6, write: true, mappedLength: 512)
+    #expect(mapping.ranges.first?.0 == 0)
+    try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
+    #expect(attr.size == 37, "Mapping must not publish rounded allocation as EOF")
+    let payload = Array("P0-append".utf8)
+    try landPayload(device, mapping, offset: 37, bytes: payload)
+    var calls = 0
+    volume.completeIO(for: item, offset: 0, length: 46, status: nil, flags: [.write], operationID: .unspecified) {
+        calls += 1; #expect($0 == nil)
+    }
+    #expect(calls == 1)
+    // Unspecified completion cannot release the explicit mapping's lease.
+    #expect(item.operation == FSOperationID(rawValue: 6))
+    volume.completeIO(for: item, offset: 0, length: 46, status: nil, flags: [.write], operationID: FSOperationID(rawValue: 6)) {
+        calls += 1; #expect($0 == nil)
+    }
+    volume.synchronize(flags: .wait) { calls += 1; #expect($0 == nil) }
+    volume.closeItem(item, modes: [.write]) { calls += 1; #expect($0 == nil) }
+    #expect(calls == 4 && item.operation == nil)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 47) == original + payload)
+}
+
+@Test func nonresidentAppendAtNonalignedEOFDoesNotExposeRoundedTail() throws {
+    let device = try CompletionDevice()
+    let (volume, item) = try mappedFixture(device, writable: true)
+    defer { volume.unmount {} }
+    let original = try fixtureBytes(device, item, length: 4_194_427)
+    let mapping = try mapFixture(volume, item, offset: 4_194_427, length: 9, id: 61, write: true, mappedLength: 512)
+    #expect(mapping.ranges.first?.0 == 4_194_304)
+    let payload = Array("P0-append".utf8)
+    try landPayload(device, mapping, offset: 4_194_427, bytes: payload)
+    var calls = 0
+    volume.completeIO(for: item, offset: 0, length: 4_194_436, status: nil, flags: [.write],
+                      operationID: FSOperationID(rawValue: 61)) { calls += 1; #expect($0 == nil) }
+    #expect(calls == 1 && item.operation == nil)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 4_194_437) == original + payload)
+}
+
+@Test func millionAndThreeByteWriteMapsAlignedAllocationButKeepsExactEOF() throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
+    var found: FSItem?
+    volume.createItem(named: FSFileName(string: "nonaligned.bin"), type: .file,
+                      inDirectory: YuzuNTFSItem(ref: 5, parent: 5), attributes: FSItem.SetAttributesRequest()) {
+        found = $0; #expect($2 == nil)
+    }
+    let item = try #require(found as? YuzuNTFSItem)
+    let payload = (0..<1_000_003).map { UInt8(truncatingIfNeeded: $0 * 17 + 3) }
+    let mapping = try mapFixture(volume, item, offset: 0, length: 1_000_003, id: 71,
+                                 write: true, mappedLength: 1_000_448)
+    var attr = nb_attr()
+    try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
+    #expect(attr.size == 0)
+    try landPayload(device, mapping, offset: 0, bytes: payload)
+    var calls = 0
+    volume.completeIO(for: item, offset: 0, length: 1_000_003, status: nil, flags: [.write],
+                      operationID: FSOperationID(rawValue: 71)) { calls += 1; #expect($0 == nil) }
+    volume.synchronize(flags: .wait) { calls += 1; #expect($0 == nil) }
+    #expect(calls == 2 && item.operation == nil)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 1_000_004) == payload)
+    try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
+    #expect(attr.size == 1_000_003)
 }
