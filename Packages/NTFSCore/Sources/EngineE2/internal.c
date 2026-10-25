@@ -212,17 +212,9 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len, int fail_after_alloc
     if (off + len > (uint64_t)ni->allocated_size) {
         mutex_lock(&ni->mrec_lock);
         /* Keep EOF/VDL unchanged even if any allocation/search step fails. */
-        uint64_t needed = off + len, reservation = needed;
-        /* Reserve ahead once contiguous growth reaches streaming size, even
-         * when the kernel splits the stream into small mapping upcalls. */
-        if (needed >= 1024 * 1024 && off <= (uint64_t)ni->allocated_size &&
-            needed <= INT64_MAX - 8 * 1024 * 1024)
-            reservation = round_up(needed, UINT64_C(8) * 1024 * 1024);
-        err = e2_allocate_non_sparse(ni, reservation);
-        /* Speculation must not turn an otherwise satisfiable write into
-         * ENOSPC. The expansion primitive rolls back failed reservations. */
-        if (err == -ENOSPC && reservation != needed)
-            err = e2_allocate_non_sparse(ni, needed);
+        /* P0 uses exact allocation: speculative slack cannot safely be
+         * retired without a lease-aware close/reclaim lifecycle (D-R1). */
+        err = e2_allocate_non_sparse(ni, off + len);
         if (!err && fail_after_allocation) err = -ENOMEM;
         mutex_unlock(&ni->mrec_lock);
         if (err) goto done;

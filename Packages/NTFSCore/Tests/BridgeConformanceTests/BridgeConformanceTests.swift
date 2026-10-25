@@ -221,7 +221,7 @@ private let collect: nb_dirent_cb = { ctx, name, len, _, cookie in
 }
 
 struct BridgeConformanceTests {
-    @Test(arguments: Engine.allCases) func sequentialMappingsReserveAheadWithoutPublishingSizes(engine: Engine) throws {
+    @Test(arguments: Engine.allCases) func sequentialMappingsAllocateExactlyWithoutPublishingSizes(engine: Engine) throws {
         let mounted = try Mounted(engine, "basic-512", write: true)
         let name = Array("sequential.bin".utf16)
         var attr = nb_attr(), count = 0
@@ -230,19 +230,18 @@ struct BridgeConformanceTests {
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, 1024 * 1024, 1, &extent, 1, &count) == 0)
         try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
         #expect(attr.size == 0)
-        #expect(attr.alloc_size >= 8 * 1024 * 1024)
-        let allocation = attr.alloc_size
+        #expect(attr.alloc_size == 1024 * 1024)
         let before = mounted.image.io.flushCount
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 1024 * 1024, 1024 * 1024, 1, &extent, 1, &count) == 0)
         #expect(mounted.image.io.flushCount == before)
         try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
-        #expect(attr.alloc_size == allocation)
+        #expect(attr.alloc_size == 2 * 1024 * 1024)
         #expect(attr.size == 0)
         #expect(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 1024 * 1024, EIO, 1) == EIO)
         #expect(try mounted.lookup("/sequential.bin").size == 0)
     }
 
-    @Test(arguments: Engine.allCases) func smallSequentialUpcallsOnLargeFilesReserveAhead(engine: Engine) throws {
+    @Test(arguments: Engine.allCases) func smallSequentialUpcallsAllocateOnlyTheirClusterRange(engine: Engine) throws {
         let mounted = try Mounted(engine, "basic-512", write: true)
         let name = Array("short-upcalls.bin".utf16)
         var attr = nb_attr(), count = 0
@@ -251,8 +250,62 @@ struct BridgeConformanceTests {
         var extent = nb_extent()
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 1024 * 1024, 4096, 1, &extent, 1, &count) == 0)
         try #require(mounted.api.nb_getattr!(mounted.volume, attr.ref, 5, &attr) == 0)
-        #expect(attr.alloc_size >= 8 * 1024 * 1024)
+        #expect(attr.alloc_size == 1024 * 1024 + 4096)
         #expect(attr.size == 1024 * 1024)
+    }
+
+    @Test(arguments: Engine.allCases) func closedAndReclaimedStreamingFilesDoNotRetainSpeculativeSpace(engine: Engine) throws {
+        let mounted = try Mounted(engine, "basic-512", write: true)
+        func knownSpace() throws -> nb_stat {
+            var state = nb_stat()
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                try #require(mounted.api.nb_statfs!(mounted.volume, &state) == 0)
+                if state.free_blocks > 0 { return state }
+                Thread.sleep(forTimeInterval: 0.001)
+            } while Date() < deadline
+            Issue.record("free-space initialization did not finish")
+            return state
+        }
+        let before = try knownSpace()
+        let payload = Data(repeating: 0x63, count: 1024 * 1024)
+        for index in 0..<100 {
+            let name = Array("closed-\(index).bin".utf16)
+            var attr = nb_attr(), count = 0
+            try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+            try #require(mounted.api.nb_hold!(mounted.volume, attr.ref) == 0)
+            var extents = [nb_extent](repeating: nb_extent(), count: 128)
+            try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, UInt64(payload.count), 1, &extents, extents.count, &count) == 0)
+            for extent in extents.prefix(count) {
+                try payload.withUnsafeBytes {
+                    try #require(pwrite(mounted.image.fd, $0.baseAddress!.advanced(by: Int(extent.logical)),
+                                       Int(extent.length), off_t(extent.physical)) == Int(extent.length))
+                }
+            }
+            try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, UInt64(payload.count), 0, 1) == 0)
+            try #require(mounted.api.nb_release!(mounted.volume, attr.ref) == 0)
+            let closed = try mounted.lookup("/closed-\(index).bin")
+            try #require(closed.alloc_size == UInt64(payload.count))
+            if index == 0 {
+                let afterClose = try knownSpace()
+                #expect((before.free_blocks - afterClose.free_blocks) * UInt64(before.block_size) < 2 * 1024 * 1024)
+                try #require(mounted.api.nb_unmount!(mounted.volume) == 0); mounted.volume = nil
+                try #require(mounted.api.nb_mount!(&mounted.image.dev, 1, &mounted.volume) == 0)
+                #expect(try mounted.read(mounted.lookup("/closed-0.bin")) == payload)
+            }
+        }
+        try #require(mounted.api.nb_unmount!(mounted.volume) == 0); mounted.volume = nil
+        try #require(mounted.api.nb_mount!(&mounted.image.dev, 0, &mounted.volume) == 0)
+        let afterRemount = try knownSpace()
+        let consumed = (before.free_blocks - afterRemount.free_blocks) * UInt64(before.block_size)
+        #expect(consumed >= 100 * 1024 * 1024)
+        #expect(consumed < 102 * 1024 * 1024)
+        for index in 0..<100 {
+            let attr = try mounted.lookup("/closed-\(index).bin")
+            #expect(attr.size == UInt64(payload.count))
+            #expect(attr.alloc_size == UInt64(payload.count))
+        }
+        #expect(try mounted.read(mounted.lookup("/closed-99.bin")) == payload)
     }
 
     @Test(arguments: Engine.allCases) func completionDefersMetadataCheckpointButFlushesPayload(engine: Engine) throws {
