@@ -54,6 +54,7 @@ mounted = False
 def mount_image():
     global mounted
     if checked_device() != dev: raise SystemExit('image device changed')
+    started = time.monotonic()
     if fstype == 'exfat':
         command = ['diskutil', 'mount']
         if readonly: command += ['readOnly']
@@ -62,6 +63,7 @@ def mount_image():
         command = ['/sbin/mount', '-F']
         if readonly: command += ['-r']
         subprocess.run(command + ['-t', fstype, dev, str(mount)], check=True)
+    elapsed = time.monotonic() - started
     mounted = True
     info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', str(mount)]))
     if fstype == 'yuzuntfs':
@@ -72,18 +74,19 @@ def mount_image():
             raise SystemExit('mounted backing device/filesystem mismatch: ' + str(error))
     elif info.get('DeviceNode') != dev or info.get('FilesystemType', '').lower() != fstype or info.get('MountPoint') != str(mount):
         raise SystemExit('mounted backing device/filesystem mismatch; no benchmark writes permitted')
+    return elapsed
 def remount():
     global mounted
     if checked_device() != dev: raise SystemExit('image device changed')
     if mounted: subprocess.run(['/sbin/umount', str(mount)], check=True)
     mounted = False
-    mount_image()
+    return mount_image()
 def cleanup():
     if serial: revoke()
     if mounted: subprocess.run(['/sbin/umount', str(mount)], check=False)
     if checked_device() == dev: subprocess.run(['hdiutil', 'detach', dev], check=False, stdout=subprocess.DEVNULL)
 atexit.register(cleanup)
-mount_image()
+initial_mount_time = mount_image()
 
 def cpu_sample(stop, values):
     if fstype != 'yuzuntfs': return
@@ -121,12 +124,13 @@ file = work / 'sequential.bin'
 if readonly and not file.exists(): raise SystemExit('read-only baseline needs a preseeded .yuzu-p0-bench/sequential.bin')
 print('| Driver | Run | Workload | Seconds | MiB/s | Extension CPU % (sample mean) |', flush=True)
 print('|---|---:|---|---:|---:|---:|', flush=True)
+row(0, 'mount-8GiB-initial', initial_mount_time)
 for run in range(1, 6):
-    remount()
+    row(run, 'mount-before-seq-write', remount())
     if not readonly:
         result, elapsed, cpu = timed(lambda: seq('write', file))
         row(run, 'seq-write-4GiB-F_NOCACHE', result['seconds'], result['mib_s'], cpu)
-    remount()
+    row(run, 'mount-before-seq-read', remount())
     result, elapsed, cpu = timed(lambda: seq('read', file))
     row(run, 'seq-read-4GiB-F_NOCACHE', result['seconds'], result['mib_s'], cpu)
     if readonly: continue
@@ -139,10 +143,10 @@ for run in range(1, 6):
     _, elapsed, cpu = timed(smallcopy); row(run, 'copy-10000x4KiB', elapsed, cpu=cpu)
     tree = work / 'tree'; tree.mkdir(exist_ok=True)
     for i in range(100000): (tree / f'{i:06d}').touch(exist_ok=True)
-    remount()
+    row(run, 'mount-before-ls', remount())
     _, elapsed, cpu = timed(lambda: subprocess.run(['/bin/ls', '-l', str(tree)], stdout=subprocess.DEVNULL, check=True))
     row(run, 'ls-l-100k', elapsed, cpu=cpu)
-    remount()
+    row(run, 'mount-before-rm', remount())
     _, elapsed, cpu = timed(lambda: subprocess.run(['/bin/rm', '-rf', str(tree)], check=True))
     row(run, 'rm-rf-100k', elapsed, cpu=cpu)
     subprocess.run(['/bin/rm', '-rf', str(small)], check=True)

@@ -72,7 +72,7 @@ os._exit(0)
                     return f'{device} on /safe/mount ({filesystem}, local, fskit)\n'
                 return plistlib.dumps({'DeviceNode': device, 'FilesystemType': filesystem, 'MountPoint': '/safe/mount'})
             subprocess_fake = SimpleNamespace(run=lambda *a, **k: None, check_output=output)
-            namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='yuzuntfs', readonly=False, mount=pathlib.Path('/safe/mount'), subprocess=subprocess_fake, plistlib=plistlib, mounted=False)
+            namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='yuzuntfs', readonly=False, mount=pathlib.Path('/safe/mount'), subprocess=subprocess_fake, plistlib=plistlib, mounted=False, time=time)
             exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
             with self.assertRaisesRegex(SystemExit, 'mismatch'):
                 namespace['mount_image']()
@@ -88,9 +88,19 @@ os._exit(0)
                         return '/dev/test on /safe/mount (yuzuntfs, local, fskit)\n'
                     return plistlib.dumps(info)
                 fake = SimpleNamespace(run=lambda *a, **k: None, check_output=output)
-                namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='yuzuntfs', readonly=False, mount=pathlib.Path('/safe/mount'), subprocess=fake, plistlib=plistlib, mounted=False)
+                namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='yuzuntfs', readonly=False, mount=pathlib.Path('/safe/mount'), subprocess=fake, plistlib=plistlib, mounted=False, time=time)
                 exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
                 namespace['mount_image']()
+
+    def test_mount_time_is_reported_separately_from_validation(self):
+        source = SCRIPT.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'mount_image')
+        info = {'DeviceNode': '/dev/test', 'FilesystemType': 'exfat', 'MountPoint': '/safe/mount'}
+        fake = SimpleNamespace(run=lambda *a, **k: None, check_output=lambda *a, **k: plistlib.dumps(info))
+        times = iter((10, 51))
+        namespace = dict(checked_device=lambda: '/dev/test', dev='/dev/test', fstype='exfat', readonly=False, mount=pathlib.Path('/safe/mount'), subprocess=fake, plistlib=plistlib, mounted=False, time=SimpleNamespace(monotonic=lambda: next(times)))
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
+        self.assertEqual(namespace['mount_image'](), 41)
 
     def test_image_driver_mismatch_rejected_before_authorization(self):
         with tempfile.TemporaryDirectory() as directory:

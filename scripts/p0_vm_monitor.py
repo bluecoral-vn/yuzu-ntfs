@@ -15,7 +15,7 @@ class UStateMonitor:
         self.owned_paths = tuple(str(path) for path in owned_paths)
         self.waits = {}
 
-    def observe(self, text, now, open_paths=None):
+    def observe(self, text, now, open_paths=None, mounting_benchmark=False):
         current, stops, info = {}, [], []
         for row in text.splitlines():
             fields = row.split(None, 2)
@@ -24,16 +24,49 @@ class UStateMonitor:
             pid, state, command = int(fields[0]), fields[1], fields[2]
             if 'U' not in state:
                 continue
-            key = (pid, command)
+            extension = 'YuzuNTFSModule' in command or '/com.apple.fskit.exfat.appex/Contents/MacOS/' in command
+            mount_grace = mounting_benchmark and extension
+            key = (pid, command, mount_grace)
             since = self.waits.get(key, now)
             current[key] = since
             paths = (open_paths or {}).get(pid, ())
             owned = (any(name in command for name in ('YuzuNTFSModule', 'p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
                      or any(path in command or any(path in opened for opened in paths) for path in self.owned_paths))
-            message = f'PID {pid} U for {now - since:.1f}s ({"owned" if owned else "unrelated"}): {command}'
-            (stops if now - since >= 20 else info).append(message)
+            limit = 120 if mount_grace else 20
+            message = f'PID {pid} U for {now - since:.1f}s ({"owned" if owned else "unrelated"}, limit={limit}s): {command}'
+            (stops if now - since >= limit else info).append(message)
         self.waits = current
         return stops, info
+
+def benchmark_mount_active(text, root):
+    """V-R3: only an actual mount command for our exact 8 GiB bench images."""
+    root = root.resolve()
+    for row in text.splitlines():
+        fields = row.split(None, 2)
+        if len(fields) != 3:
+            continue
+        args = fields[2].split()
+        if len(args) == 6 and args[:4] == ['/sbin/mount', '-F', '-t', 'yuzuntfs']:
+            device, target = args[4], Path(args[5]).resolve()
+            if not target.is_relative_to(root / 'build/p0-guest') or target.name != 'bench-mount':
+                continue
+            image = root / 'build/r3/bench-ntfs.img'
+        elif len(args) == 5 and Path(args[0]).name == 'diskutil' and args[1:3] == ['mount', '-mountPoint']:
+            target, device = Path(args[3]).resolve(), args[4]
+            if target != root / 'build/baseline/mount':
+                continue
+            image = root / 'build/baseline/exfat.img'
+        else:
+            continue
+        if not device.startswith('/dev/disk') or not device[len('/dev/disk'):].isdigit():
+            continue
+        try:
+            if image.resolve().is_relative_to(root) and image.is_file() and image.stat().st_size == 8 * 1024**3:
+                return True
+        except OSError:
+            pass
+    return False
+
 
 
 def capture_stop(root, process_text):
@@ -87,7 +120,8 @@ def main():
                         if opened.returncode not in (0, 1):
                             raise RuntimeError('Cannot inspect U-process cwd/open files: ' + opened.stderr)
                         paths[int(fields[0])] = [line[1:] for line in opened.stdout.splitlines() if line.startswith('n')]
-                stops, info = monitor.observe(result.stdout, time.monotonic(), paths)
+                info_mount = benchmark_mount_active(result.stdout, root)
+                stops, info = monitor.observe(result.stdout, time.monotonic(), paths, mounting_benchmark=info_mount)
                 for message in info:
                     observations.write('INFO transient ' + message + '\n')
                 observations.flush()

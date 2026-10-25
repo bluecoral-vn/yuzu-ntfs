@@ -89,6 +89,14 @@ class ReadOnlyAcceptance(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'prompt'):
                 guest.retained_writeback(lambda: None)
 
+    def test_retained_callbacks_accept_page_sized_new_mapping(self):
+        completion = 'completeIO offset=0 length=8192 write=true operationID=0\n'
+        mapping = 'blockmapFile offset=16384 length=16384 write=true operationID=69\n'
+        guest.check_retained_callbacks(completion + mapping)
+        for text in (completion, mapping, completion + mapping.replace('write=true', 'write=false')):
+            with self.assertRaises(RuntimeError):
+                guest.check_retained_callbacks(text)
+
 
 if __name__ == '__main__':
     unittest.main()

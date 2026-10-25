@@ -32,5 +32,47 @@ class RecordedProcessStates(unittest.TestCase):
                     self.assertFalse(monitor.observe('50 U ' + command, now, paths)[0])
                 self.assertTrue(monitor.observe('50 U ' + command, 20, paths)[0])
 
+    def test_vr3_mount_only_extends_extension_wait_to_120_seconds(self):
+        monitor = UStateMonitor([])
+        row = '50 U /Applications/Yuzu NTFS.app/Contents/MacOS/YuzuNTFSModule'
+        for now in range(120):
+            self.assertFalse(monitor.observe(row, now, mounting_benchmark=True)[0])
+        self.assertTrue(monitor.observe(row, 120, mounting_benchmark=True)[0])
+        self.assertFalse(monitor.observe(row, 121, mounting_benchmark=False)[0])
+        self.assertTrue(monitor.observe(row, 141, mounting_benchmark=False)[0])
+        apple = UStateMonitor([])
+        apple_row = '70 U /System/Library/ExtensionKit/Extensions/com.apple.fskit.exfat.appex/Contents/MacOS/com.apple.fskit.exfat'
+        apple.observe(apple_row, 0, mounting_benchmark=True)
+        self.assertFalse(apple.observe(apple_row, 119, mounting_benchmark=True)[0])
+        self.assertTrue(apple.observe(apple_row, 120, mounting_benchmark=True)[0])
+        for command in ('cp /owned/a /owned/b', 'diskimages-helper', 'mds_stores'):
+            other = UStateMonitor([])
+            other.observe('60 U ' + command, 0, mounting_benchmark=True)
+            self.assertTrue(other.observe('60 U ' + command, 20, mounting_benchmark=True)[0])
+
+    def test_vr3_requires_actual_owned_eight_gib_benchmark_mount(self):
+        import tempfile
+        from pathlib import Path
+        from p0_vm_monitor import benchmark_mount_active
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / 'build/r3/bench-ntfs.img'
+            image.parent.mkdir(parents=True)
+            with image.open('wb') as output:
+                output.truncate(8 * 1024**3)
+            row = f'50 S /sbin/mount -F -t yuzuntfs /dev/disk9 {root}/build/p0-guest/owned/bench-mount'
+            self.assertTrue(benchmark_mount_active(row, root))
+            for invalid in (row.replace('bench-mount', 'rw-mount'), row.replace(str(root), '/foreign'), row.replace('/sbin/mount', '/bin/cp')):
+                self.assertFalse(benchmark_mount_active(invalid, root))
+            with image.open('wb') as output:
+                output.truncate(256 * 1024**2)
+            self.assertFalse(benchmark_mount_active(row, root))
+            exfat = root / 'build/baseline/exfat.img'
+            exfat.parent.mkdir()
+            with exfat.open('wb') as output:
+                output.truncate(8 * 1024**3)
+            apple_row = f'70 S diskutil mount -mountPoint {root}/build/baseline/mount /dev/disk10'
+            self.assertTrue(benchmark_mount_active(apple_row, root))
+
 if __name__ == '__main__':
     unittest.main()

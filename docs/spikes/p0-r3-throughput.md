@@ -1488,3 +1488,63 @@ The same limitation is recorded in `ntfs_bridge.h`.
 All seven Python suites pass after three new M-R1 regressions first failed
 on the missing gate functions: **41 tests** total (`python-m-r1.log`).
 
+### M-R1 mounted result and callback predicate correction
+
+The revised workload in the **same staged 61e93f1 binary and clone** passed
+prompt retained mmap writeback (success), NEW-write EROFS, both detached
+verbose inode metadata comparisons, allocation/runlist/EOF/VDL preservation,
+data confinement, and remount readback. The retained file's first byte
+changed from B to X; the unmapped file remained byte-identical. No new
+allocation or target metadata change is accepted by this gate.
+
+The initial callback-evidence predicate incorrectly required the NEW
+blockmap's length to equal the user's 512-byte write. The actual VM log
+shows **READ(16384,16384)** zeroFill followed by three denied
+**WRITE(16384,16384)** attempts (operation IDs 69, 70, 71), without a packed
+write extent. This is a page-sized kernel request, not missing blockmap
+evidence. The predicate now requires the correct NEW logical origin and
+write flag without inventing a request length. A recorded-page-size
+regression covers the observed shape and rejects missing/read-only records.
+All Python suites pass: **42 tests**, `python-m-r1-final.log`.
+
+The corrected predicate was replayed against the already-collected real
+callback sequence beginning at retained READ operation 66, together with
+the detached before/after metadata/data artifacts and actual remount
+verdicts. No mounted workload was silently rerun to disguise the harness
+false failure. `resume-mr1-evidence.py` records that exact validation and
+continues only then into the unchanged deadline-supervised benchmark.
+Evidence UUID: `97d699ee-c831-4097-85fd-89c9d37ba69b`;
+callbacks: `mr1-rw-callbacks.log`; workload: `mr1-acceptance-observed.log`.
+
+### Benchmark mount finding and controller ruling V-R3
+
+The first benchmark attempt, after M-R1 validation, reached the dedicated
+8 GiB image's initial mount. V-R2 correctly stopped on extension PID 2228
+continuously in U for **20.5 seconds**, before any timed workload row.
+The disk-image helper sample was servicing backing-file pread. Subsequent
+captured logs show that the mount finished at about **41 seconds**, then
+the supervisor's signal caused a clean spontaneous unmount. This evidence
+does not establish a deadlock; the first attempt produced **zero** timed
+benchmark runs. The RW allowlist was revoked before signaling.
+
+**V-R3 permits up to 120 seconds in U for the filesystem extension only
+during an actual MOUNT command for the owned 8 GiB benchmark images.**
+Other processes, other images, every non-mount phase and phase deadlines
+retain V-R2's 20-second rule. The monitor validates the actual mount command,
+owned image/mount paths and exact 8 GiB backing-file size; leaving the mount
+phase restores the normal timer. Recorded-state tests cover 120-second
+extension waits, unchanged 20-second limits for everyone else, phase exit,
+foreign/small images, and Yuzu/Apple exFAT mount recognition.
+
+The benchmark now records initial and remount command duration as separate
+rows, excluding the later identity-validation commands. A recorded 41-second
+mount timer first failed before implementation. All Python suites pass:
+**45 tests** (`python-vr3.log`). No extension executable changed.
+
+**P1 performance item:** free-space initialization / $MFT and $Bitmap scans
+through a sparse image must not block mount. Report the measured Yuzu vs
+Apple exFAT mount latency independently of sequential transfer throughput.
+V-R3 authorizes one benchmark rerun on a fresh clone with the same signed,
+notarized, stapled 61e93f1 artifact; the earlier functional acceptance remains
+the immutable prerequisite, not a request to repeat mounted workloads.
+

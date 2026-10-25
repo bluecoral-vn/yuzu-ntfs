@@ -253,6 +253,13 @@ def check_retained_mapping(before, after, offset, length):
     require(before['data'][:offset] == after['data'][:offset] and before['data'][end:] == after['data'][end:],
             'Post-latch data changed outside previously mapped clusters')
 
+def check_retained_callbacks(text):
+    require('completeIO offset=0 length=8192 write=true' in text, 'Missing post-latch retained mmap completion callback')
+    # A 512-byte user write may cause a page-sized blockmap (16 KiB on the VM).
+    require(any('blockmapFile offset=16384 length=' in line and 'write=true' in line for line in text.splitlines()),
+            'NEW write was refused without exercising a new blockmap')
+
+
 
 def mapped_transition(attachment):
     target = attachment.mount / 'transition-mmap.bin'
@@ -276,6 +283,7 @@ def mapped_transition(attachment):
         HOOK.touch(exist_ok=False)
         os.statvfs(attachment.mount)
         start = (attachment.image.parent / 'rw-callbacks.log').stat().st_size
+        (attachment.image.parent / 'm-r1-callback-start.txt').write_text(str(start))
         def writeback():
             memory[0:1] = b'X'; memory.flush(); os.fsync(fd)
         retained_writeback(writeback)
@@ -376,8 +384,7 @@ def rw_acceptance(runner, image, mount, evidence):
     text = log.read_text()
     require('blockmapFile' in text and 'completeIO' in text, 'Copy without observed KOIO blockmapFile/completeIO is NOT acceptance')
     retained = log.read_bytes()[mmap_start[0]:].decode()
-    require('completeIO offset=0 length=8192 write=true' in retained, 'Missing post-latch retained mmap completion callback')
-    require('blockmapFile offset=16384 length=512 write=true' in retained, 'NEW write was refused without exercising a new blockmap')
+    check_retained_callbacks(retained)
     print('M-R1 retained completion + NEW write blockmap callback evidence PASS', flush=True)
     print('Observed KOIO callback evidence:', log, flush=True)
 
