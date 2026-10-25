@@ -26,15 +26,17 @@ class UStateMonitor:
                 continue
             extension = 'YuzuNTFSModule' in command or '/com.apple.fskit.exfat.appex/Contents/MacOS/' in command
             mount_grace = mounting_benchmark and extension
-            key = (pid, command, mount_grace)
+            paths = (open_paths or {}).get(pid, ())
+            owned = (extension or Path(command.split()[0]).name == 'fskitd'
+                     or any(name in command for name in ('p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
+                     or any(path in command or any(path in opened for opened in paths) for path in self.owned_paths))
+            key = (pid, command, owned, mount_grace)
             since = self.waits.get(key, now)
             current[key] = since
-            paths = (open_paths or {}).get(pid, ())
-            owned = (any(name in command for name in ('YuzuNTFSModule', 'p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
-                     or any(path in command or any(path in opened for opened in paths) for path in self.owned_paths))
             limit = 120 if mount_grace else 20
-            message = f'PID {pid} U for {now - since:.1f}s ({"owned" if owned else "unrelated"}, limit={limit}s): {command}'
-            (stops if now - since >= limit else info).append(message)
+            limit_text = f'{limit}s' if owned else 'log-only'
+            message = f'PID {pid} U for {now - since:.1f}s ({"owned" if owned else "unrelated"}, limit={limit_text}): {command}'
+            (stops if owned and now - since >= limit else info).append(message)
         self.waits = current
         return stops, info
 
@@ -101,7 +103,7 @@ def main():
     if owner.pw_uid == 0:
         parser.error('Worktree must belong to the guest acceptance user, not root')
     os.chdir(root)
-    monitor = UStateMonitor([root / 'build/p0-guest', root / 'build/r3'])
+    monitor = UStateMonitor([root / 'build/p0-guest', root / 'build/r3', root / 'build/baseline'])
     with (root / 'build/acceptance.log').open('w') as output, (root / 'build/u-observations.log').open('w') as observations:
         command = ['sudo', '-u', owner.pw_name, '/usr/bin/env', 'HOME=' + owner.pw_dir,
                    'PATH=' + owner.pw_dir + '/bin:/usr/bin:/bin:/usr/sbin:/sbin',

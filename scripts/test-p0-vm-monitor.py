@@ -11,11 +11,12 @@ class RecordedProcessStates(unittest.TestCase):
         self.assertIn('877', info[0])
         self.assertFalse(monitor.observe('877 S /System/Library/PrivateFrameworks/HomeKitEvents.framework/Support/homeeventsd', 2)[0])
 
-    def test_unrelated_continuous_wait_stops_at_twenty_seconds(self):
+    def test_unrelated_continuous_wait_is_logged_and_never_stops(self):
         monitor = UStateMonitor([])
-        for now in range(0, 20, 2):
-            self.assertFalse(monitor.observe('325 Us /System/Library/Metadata/mds_stores', now)[0])
-        self.assertTrue(monitor.observe('325 Us /System/Library/Metadata/mds_stores', 20)[0])
+        for now in (0, 20, 120, 3600):
+            stop, info = monitor.observe('325 Us /usr/sbin/spindump', now)
+            self.assertFalse(stop)
+            self.assertIn('325', info[0])
 
     def test_wait_reset_and_pid_reuse(self):
         monitor = UStateMonitor([])
@@ -25,7 +26,7 @@ class RecordedProcessStates(unittest.TestCase):
         self.assertFalse(monitor.observe('325 U other-daemon', 40)[0])
 
     def test_owned_args_workers_module_and_open_paths_require_persistence(self):
-        for command, paths in [('cp /owned/mount/a /tmp/a', {}), ('YuzuNTFSModule -BSServiceDomains', {}), ('python p0_guest_acceptance.py', {}), ('python vmrw_oracle.py', {}), ('unknown-command', {50: ['/owned/mount']})]:
+        for command, paths in [('cp /owned/mount/a /tmp/a', {}), ('YuzuNTFSModule -BSServiceDomains', {}), ('/usr/libexec/fskitd', {}), ('python p0_guest_acceptance.py', {}), ('python vmrw_oracle.py', {}), ('mds_stores', {50: ['/owned/mount']})]:
             with self.subTest(command=command):
                 monitor = UStateMonitor(['/owned/mount'])
                 for now in range(20):
@@ -45,10 +46,9 @@ class RecordedProcessStates(unittest.TestCase):
         apple.observe(apple_row, 0, mounting_benchmark=True)
         self.assertFalse(apple.observe(apple_row, 119, mounting_benchmark=True)[0])
         self.assertTrue(apple.observe(apple_row, 120, mounting_benchmark=True)[0])
-        for command in ('cp /owned/a /owned/b', 'diskimages-helper', 'mds_stores'):
-            other = UStateMonitor([])
-            other.observe('60 U ' + command, 0, mounting_benchmark=True)
-            self.assertTrue(other.observe('60 U ' + command, 20, mounting_benchmark=True)[0])
+        other = UStateMonitor(['/owned'])
+        other.observe('60 U cp /owned/a /owned/b', 0, mounting_benchmark=True)
+        self.assertTrue(other.observe('60 U cp /owned/a /owned/b', 20, mounting_benchmark=True)[0])
 
     def test_vr3_requires_actual_owned_eight_gib_benchmark_mount(self):
         import tempfile

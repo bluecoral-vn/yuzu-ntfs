@@ -3,20 +3,25 @@
 
 ## Verdict
 
-**BLOCKED-PENDING-REBOOT.** A real Yuzu read-only image mount and an allowlisted read/write image mount were reached. The first mounted 1,000,003-byte `cp` wedged in kernel writeback before any active extension data upcall. Its extension was terminated under controller authorization; `cp` remained uninterruptible and subsequent image transport operations stalled. The controller stopped all further mount/attach attempts and requires an owner reboot before resuming.
-
-The resident-file routing fix below is implemented and engine-tested, **not verified through a corrected mount**. No working mounted RW copy/remove, exact-size remount check, Finder copy, mounted KOIO throughput, Apple baseline throughput, CPU percentage, or R3 performance pass is claimed. The source deliverable and repeatable image-only harness are retained so the next session can resume without reconstructing this investigation.
+**macOS 27 VM functional gate: PASS under controller ruling M-R1.** The
+sector-covering KOIO fix passes resident append/remount, nonaligned
+1000003-byte copy/EOF/remount, VDL zero tails, ADS refusal and the documented
+retained-mapping RO boundary. Physical-SSD and macOS 26 acceptance remain
+pending. Benchmark results and their separate V-R3 mount-time rule are
+reported in [Append corruption root cause (2026-10-25)](#append-corruption-root-cause-2026-10-25).
+The pre-reboot kernel wedge and the failed intermediate candidates below
+are historical evidence, not the current mounted-functional verdict.
 
 | Gate/environment | Read | Write | Verdict |
 |---|---:|---:|---|
 | macOS 27 internal-SSD image, raw backing file | 10,559.323 MiB/s median | 11,963.303 MiB/s median | Measured; not a physical-device baseline |
-| macOS 27 Yuzu KOIO image | BLOCKED | BLOCKED | BLOCKED-PENDING-REBOOT |
-| macOS 27 Apple exFAT image | BLOCKED | BLOCKED | Transport unavailable before first workload |
-| macOS 27 Apple NTFS image | BLOCKED | Read-only / N/A | Native selection/forced mounting must be established after reboot |
+| macOS 27 Yuzu KOIO, isolated VM | Functional PASS | Functional PASS under M-R1 | Performance: V-R3 benchmark section below |
+| macOS 27 Apple exFAT, isolated VM | V-R3 benchmark below | V-R3 benchmark below | Comparison uses the same guest virtual disk type |
+| macOS 27 Apple NTFS image | Not measured in VM | Read-only / N/A | No native-NTFS throughput claim |
 | Physical SSD, macOS 27 | PENDING-OWNER | PENDING-OWNER | No physical device used |
 | macOS 26 | PENDING-OWNER | PENDING-OWNER | No macOS 26 VM available |
 
-The provisional KOIO thresholds against this image-file baseline would be **9,503.391 MiB/s read** and **10,766.973 MiB/s write** (90% of medians). There is no numerator yet; a speed ratio cannot be calculated. Internal-image results cannot close the physical-SSD/macOS-26 gate.
+The historical host raw-file numbers are not a guest/physical-device denominator. V-R3 measures guest raw backing files, Apple exFAT and Yuzu separately, including mount latency; only observed timed workloads may be compared. Image/VM results cannot close the physical-SSD/macOS-26 gate.
 
 ## Environment and method
 
@@ -1547,4 +1552,28 @@ Apple exFAT mount latency independently of sequential transfer throughput.
 V-R3 authorizes one benchmark rerun on a fresh clone with the same signed,
 notarized, stapled 61e93f1 artifact; the earlier functional acceptance remains
 the immutable prerequisite, not a request to repeat mounted workloads.
+
+
+### Controller ruling V-R4 — unrelated disk wait and durable rows
+
+The V-R3 comparison attempt stopped on unrelated `spindump` PID 527 in U
+for 20.2 seconds during Apple exFAT I/O, not on Yuzu or an owned filesystem
+worker. V-R3's mount-only grace had correctly recognized Apple's extension.
+That interrupted attempt is retained as `vr3-baseline-guest-artifacts.zip`;
+no lost subprocess output is reconstructed into invented timing numbers.
+
+**V-R4 supersedes V-R2 for unrelated daemons:** only owned workers,
+processes touching the owned mounts/images, filesystem extensions and
+fskitd trigger the 20-second stop. Unrelated spindump/logd/mds/homeeventsd
+waits are always logged and never stop a run. V-R3's 120-second mount-only
+extension exception and all phase deadlines remain unchanged. Ownership
+changes reset the timer; a daemon accessing an owned mount is not exempt.
+
+Every completed benchmark row is now appended, flushed and fsynced
+immediately to `build/r3/bench-<fstype>.log`, independently of the outer
+supervisor's temporary stdout capture. This includes initial/remount
+latencies and prevents a later stop from losing already-measured rows.
+Recorded regressions first reproduced both the unrelated-daemon false stop
+and the missing durable row. All Python suites pass: **46 tests**,
+`python-vr4.log`. The extension executable remains unchanged.
 

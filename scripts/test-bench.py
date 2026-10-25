@@ -102,6 +102,17 @@ os._exit(0)
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
         self.assertEqual(namespace['mount_image'](), 41)
 
+    def test_rows_survive_in_named_log_immediately(self):
+        source = SCRIPT.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'row')
+        with tempfile.TemporaryDirectory() as directory:
+            log = pathlib.Path(directory) / 'bench.log'
+            namespace = dict(label='recorded', row_log=log, os=os)
+            exec(compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), 'exec'), namespace)
+            namespace['row'](1, 'seq-read', 2.5, 100, 3)
+            self.assertTrue(log.exists(), 'A supervisor stop must not discard completed rows')
+            self.assertIn('| recorded | 1 | seq-read | 2.500000 | 100.000 | 3.00 |', log.read_text())
+
     def test_image_driver_mismatch_rejected_before_authorization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

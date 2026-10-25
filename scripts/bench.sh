@@ -50,6 +50,13 @@ attached = plistlib.loads(subprocess.check_output(['hdiutil', 'attach', '-nomoun
 dev = next(x['dev-entry'] for x in attached['system-entities'] if x['dev-entry'].startswith('/dev/disk'))
 if dev != checked_device(): raise SystemExit('attachment device mismatch')
 mount.mkdir(parents=True, exist_ok=True)
+row_log = root / 'build/r3' / ('bench-' + fstype + '.log')
+row_log.parent.mkdir(parents=True, exist_ok=True)
+columns = '| Driver | Run | Workload | Seconds | MiB/s | Extension CPU % (sample mean) |'
+divider = '|---|---:|---|---:|---:|---:|'
+with row_log.open('a') as output:
+    output.write(columns + '\n' + divider + '\n')
+    output.flush(); os.fsync(output.fileno())
 mounted = False
 def mount_image():
     global mounted
@@ -86,7 +93,6 @@ def cleanup():
     if mounted: subprocess.run(['/sbin/umount', str(mount)], check=False)
     if checked_device() == dev: subprocess.run(['hdiutil', 'detach', dev], check=False, stdout=subprocess.DEVNULL)
 atexit.register(cleanup)
-initial_mount_time = mount_image()
 
 def cpu_sample(stop, values):
     if fstype != 'yuzuntfs': return
@@ -106,8 +112,16 @@ def timed(action):
     return result, elapsed, statistics.mean(samples) if samples else None
 
 def row(run, op, seconds, mib=None, cpu=None):
-    print(f'| {label} | {run} | {op} | {seconds:.6f} | {mib:.3f}' if mib is not None else f'| {label} | {run} | {op} | {seconds:.6f} | —', end='')
-    print(f' | {cpu:.2f} |' if cpu is not None else ' | N/A |', flush=True)
+    line = f'| {label} | {run} | {op} | {seconds:.6f} | {mib:.3f}' if mib is not None else f'| {label} | {run} | {op} | {seconds:.6f} | —'
+    line += f' | {cpu:.2f} |' if cpu is not None else ' | N/A |'
+    with row_log.open('a') as output:
+        output.write(line + '\n')
+        output.flush(); os.fsync(output.fileno())
+    print(line, flush=True)
+
+print(columns, flush=True)
+print(divider, flush=True)
+row(0, 'mount-8GiB-initial', mount_image())
 
 def seq(mode, path):
     return json.loads(subprocess.check_output([str(seqio), mode, str(path), str(4 * 1024**3)], text=True))
@@ -122,9 +136,6 @@ if not readonly:
     marker.write_text(str(image))
 file = work / 'sequential.bin'
 if readonly and not file.exists(): raise SystemExit('read-only baseline needs a preseeded .yuzu-p0-bench/sequential.bin')
-print('| Driver | Run | Workload | Seconds | MiB/s | Extension CPU % (sample mean) |', flush=True)
-print('|---|---:|---|---:|---:|---:|', flush=True)
-row(0, 'mount-8GiB-initial', initial_mount_time)
 for run in range(1, 6):
     row(run, 'mount-before-seq-write', remount())
     if not readonly:
