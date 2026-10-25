@@ -6,8 +6,8 @@
 - `slug`: `yuzu-ntfs`; `family`: `icon-hero`.
 - Phương án (`option`): `C` — Ổ đĩa + khiên · nền đồi/mây.
 - Ý tưởng: Đọc ra ổ cứng ngay nhờ cổng cắm. Khiên coral nói đúng tính năng an toàn (tự chuyển chỉ-đọc). Ảnh xám vẫn rõ. Nền: đồi + mây đều hai bên, cân đối.
-- Trạng thái (`status`): `proposed`.
-- Duyệt: `proposed` — không dùng phát hành.
+- Trạng thái (`status`): `approved`.
+- Duyệt: `approved_on`: `2026-10-25`; `approved_by`: owner (Blue Coral).
 - Chỉ `approved` được phát hành; có sẵn bản xuất **không** đồng nghĩa đã duyệt.
 
 ## Đơn vị sử dụng và tệp
@@ -158,7 +158,7 @@ git push origin HEAD
 - Kho nguồn (`source repo`): `bluecoral-origami`.
 - Vòng (`source round`): `2026-10-24-yuzu-r3b`.
 - Tệp nguồn (`source file`): `out/2026-10-24-yuzu-r3b/raw/yuzu-ntfs-c-safe-drive-bg.png`.
-- Commit thư viện lúc chụp phong cách: `a85ed4ba576477582bf514a6c35599f5457e0e09`.
+- Commit thư viện lúc chụp phong cách: `3e1437c662fe3ef836740616b8ee8a4215dc7e07`.
 - Khi lấy tài sản, pin **commit chứa nguyên thư mục đang sao chép**, không pin nhánh trôi.
   Trong bản checkout nguồn chạy `git rev-parse HEAD`, ghi đủ SHA vào dự án đích.
   Commit lúc chụp ở trên là nguồn công thức, không thay thế commit chứa lần cập nhật tài sản.
