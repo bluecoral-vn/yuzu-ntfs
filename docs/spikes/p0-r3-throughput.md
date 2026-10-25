@@ -1254,3 +1254,88 @@ VM monitor 4). Durable output is under
 The correction and these checks used no host image attachment, host mount,
 app build/registration/installation or push. They do **not** close the VM RW
 acceptance gate or claim that inaccessible kernel internals were reproduced.
+
+## VM RW acceptance — exact extents (2026-10-25)
+
+**FAIL / R3 VM-provisional NO-GO.** Approved candidate
+`ac94fd650b255d400f077334021cde5c377509e1` (including `efdf1ac`) built
+Release-Direct, Developer ID signed, notarized
+`72432e1b-eb45-4f19-af2b-570afa00b1ab` **Accepted**, stapled and verified
+with strict codesign/Gatekeeper. Both embedded git identities matched;
+KOIO=true and AppIcon name/resource passed. Module executable SHA-256:
+`7c7c6e11d97dc40a418db4e0ad8722986a6e8fe6b6f674f860a209dbcda2ae23`.
+No host installation, agent refresh, image attachment or mounted workload.
+
+Fresh clone `yuzu-qc-run-ntfs-20261025-exact`:
+macOS **27.0.1 / 26A434**, **4 vCPU / 12 GiB / 80 GB virtio disk**,
+VM flag 1, read-only payload share unmounted before guest install.
+The unchanged installer verified the exact staged identity and enabled=true.
+The single acceptance evidence UUID was
+`4aec4b3a-d0a4-4521-ada5-4ed730dec492`.
+
+| Gate | Result |
+|---|---|
+| RO basic/names/bigdir hashes | PASS |
+| RO enumeration / unchanged images / clean detach | PASS, exactly 100000 entries |
+| Resident append + clean remount | **FAIL — same detached data corruption** |
+| 1000003-byte cp/stat/cmp/EOF/remount | NOT REACHED |
+| Copy KOIO evidence | NOT REACHED; append callbacks captured below |
+| VDL 37 + ftruncate 8192 / remount | NOT REACHED |
+| ADS write refusal | NOT REACHED |
+| Force-RO open fd / mmap / remount | NOT REACHED |
+
+Detached ntfscat snapshots before first mount, after append before remount,
+and after final detach show original **37 bytes** becoming **46 bytes**:
+ASCII `P0-append` at offset **0**, followed by **37 zero bytes**.
+Expected original37 + append9 did not survive. This is a disk-byte failure,
+not merely stale mounted readback. The first/last logical 512-byte records,
+full bytes, hashes and corrupted detached image are retained.
+
+Crucially, the new public packExtent trace now confirms the exact byte-origin
+mapping, yet the failure remains:
+
+```text
+blockmapFile offset=0 length=37 write=false operationID=5
+packExtent ref=64 operationID=5 logical=0 physical=53121024 length=37 zeroFill=false
+blockmapFile offset=37 length=9 write=true operationID=6
+packExtent ref=64 operationID=6 logical=37 physical=53121061 length=9 zeroFill=false
+completeIO offset=0 length=46 write=true operationID=6
+```
+
+No causal explanation is inferred from these coordinates. The acceptance
+stopped on the first mismatch; no patched test, second RW attempt or
+benchmark was run. V-R2 supervision logged transient U but encountered no
+continuous >=20-second U or phase deadline.
+
+| Benchmark driver | Runs | Seq read/write 4 GiB | Copy 10k x 4 KiB | ls/rm 100k |
+|---|---:|---|---|---|
+| Yuzu KOIO | 0 | NOT RUN | NOT RUN | NOT RUN |
+| Apple exFAT, same guest disk type | 0 | NOT RUN | NOT RUN | NOT RUN |
+| Raw guest backing file | 0 | NOT RUN | N/A | N/A |
+
+Numbers/medians/ratios remain unavailable because RW acceptance failed.
+Verdict is **VM-provisional NO-GO**, not physical-SSD evidence;
+macOS 26 and physical SSD remain pending.
+
+Evidence: `build/qc-runs/20261025-vmrw-exact/` contains build/notary/staple/
+identity/install transcripts, complete acceptance observations,
+`rw-callbacks.log`, full `module-log.log` captured with `--info --debug`,
+module samples and final inventories, `oracle-summary.txt`,
+the preserved guest-only `vmrw_oracle.py` instrument, and
+`guest-artifacts.zip` with the corrupted rw.img, callback logs and detached
+before/after oracle files. Guest DiagnosticReports was empty.
+
+VM-capacity anomaly: another session started `origami-glass` after initial
+inventory, occupying VNC 5997 and the second Apple VM slot alongside sync14.
+Our failed launch service was removed; capacity was checked every 60 seconds
+until a slot became available (about five minutes). No peer VM was stopped.
+New-helper QoS detection briefly backgrounded peer PID 65802; controller-
+authorized `taskpolicy -B -p 65802` succeeded before waiting. At actual
+launch only our newly created helper received background QoS. Automatic VNC
+port selection avoided the occupied port.
+
+Cleanup completed: supervised RW unmount/detach succeeded, final guest image
+inventory was empty, RW allowlist zero bytes, no force-RO hook. Requested
+shutdown returned expected tcpShutdown; guest runner and our host service
+were removed, our clone deleted and payload share removed. Goldens and other
+sessions' VMs were left intact. No push.
