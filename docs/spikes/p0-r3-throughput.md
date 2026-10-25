@@ -1006,3 +1006,21 @@ sudo /Users/lume/bin/python3 scripts/p0_vm_monitor.py --root /Users/lume/yuzu-nt
 
 Four recorded-state Python regression tests passed (transient homeeventsd,
 continuous mds_stores, reset/PID reuse, and owned command/open-path cases).
+
+V-R1 fresh clone `yuzu-qc-run-ntfs-20261025-vr1` reused that same notarized
+build (no rebuild). Guest install/readiness passed; RO basic and names hashes
+and image preservation passed, as did bigdir sample hashes. The monitor
+stopped on owned `ls -1 -A <bigdir-ro-mount>` PID 1170 in U before enumeration
+completed. The process had exited before its stack could be sampled.
+Module stack, unified logs, recorded process states and callback logs are in
+`build/qc-runs/20261025-vmrw-vr1/`. No RW/adjacent-byte/bench result exists.
+The guest was shut down and its launchctl service removed.
+
+**Controller ruling V-R2 supersedes V-R1's immediate owned-U stop.**
+Brief U while an FSKit upcall is served is normal for owned callers too.
+The monitor now samples every one second and requires continuous U for
+at least 20 seconds for any process; phase deadlines still apply.
+Before a persistence/deadline stop it captures bounded samples of all current
+U processes and YuzuNTFSModule plus fskitd/module logs before signaling.
+Regression coverage now includes 19 informational owned-U samples followed by
+a mandatory stop at 20 seconds, for owned arguments/workers/module/open paths.

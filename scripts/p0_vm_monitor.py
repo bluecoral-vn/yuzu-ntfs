@@ -30,10 +30,28 @@ class UStateMonitor:
             paths = (open_paths or {}).get(pid, ())
             owned = (any(name in command for name in ('YuzuNTFSModule', 'p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
                      or any(path in command or any(path in opened for opened in paths) for path in self.owned_paths))
-            message = f'PID {pid} U for {now - since:.1f}s: {command}'
-            (stops if owned or now - since >= 20 else info).append(message)
+            message = f'PID {pid} U for {now - since:.1f}s ({"owned" if owned else "unrelated"}): {command}'
+            (stops if now - since >= 20 else info).append(message)
         self.waits = current
         return stops, info
+
+
+def capture_stop(root, process_text):
+    """Bounded evidence capture before signaling an acceptance worker."""
+    pids = {row.split(None, 2)[0] for row in process_text.splitlines()
+            if len(row.split(None, 2)) == 3
+            and ('U' in row.split(None, 2)[1] or 'YuzuNTFSModule' in row.split(None, 2)[2])}
+    commands = [['sample', pid, '2', '1'] for pid in sorted(pids)]
+    commands.append(['/usr/bin/log', 'show', '--last', '3m', '--style', 'compact',
+                     '--predicate', 'process == "fskitd" OR process == "YuzuNTFSModule"'])
+    with (root / 'build/pre-stop-evidence.log').open('w') as output:
+        for command in commands:
+            output.write('+ ' + ' '.join(command) + '\n')
+            output.flush()
+            try:
+                subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=12)
+            except subprocess.TimeoutExpired:
+                output.write('Evidence command deadline exceeded\n')
 
 
 def main():
@@ -58,6 +76,7 @@ def main():
         child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 2700
         while child.poll() is None:
+            sampled_at = time.monotonic()
             try:
                 result = subprocess.run(['ps', '-axo', 'pid=,state=,command='], capture_output=True, text=True, check=True, timeout=10)
                 paths = {}
@@ -76,13 +95,14 @@ def main():
                     stops.append('TOTAL DEADLINE')
                 if stops:
                     (root / 'build/safety-stop.txt').write_text('\n'.join(stops) + '\n' + result.stdout)
+                    capture_stop(root, result.stdout)
                     child.send_signal(signal.SIGTERM)
                     break
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
                 (root / 'build/safety-stop.txt').write_text('MONITOR ERROR: ' + str(error))
                 child.send_signal(signal.SIGTERM)
                 break
-            time.sleep(2)
+            time.sleep(max(0, 1 - (time.monotonic() - sampled_at)))
         try:
             status = child.wait(timeout=8)
         except subprocess.TimeoutExpired:

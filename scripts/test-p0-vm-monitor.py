@@ -24,10 +24,13 @@ class RecordedProcessStates(unittest.TestCase):
         self.assertFalse(monitor.observe('325 U mds_stores', 20)[0])
         self.assertFalse(monitor.observe('325 U other-daemon', 40)[0])
 
-    def test_owned_args_workers_module_and_open_paths_stop_immediately(self):
+    def test_owned_args_workers_module_and_open_paths_require_persistence(self):
         for command, paths in [('cp /owned/mount/a /tmp/a', {}), ('YuzuNTFSModule -BSServiceDomains', {}), ('python p0_guest_acceptance.py', {}), ('python vmrw_oracle.py', {}), ('unknown-command', {50: ['/owned/mount']})]:
             with self.subTest(command=command):
-                self.assertTrue(UStateMonitor(['/owned/mount']).observe('50 U ' + command, 0, paths)[0])
+                monitor = UStateMonitor(['/owned/mount'])
+                for now in range(20):
+                    self.assertFalse(monitor.observe('50 U ' + command, now, paths)[0])
+                self.assertTrue(monitor.observe('50 U ' + command, 20, paths)[0])
 
 if __name__ == '__main__':
     unittest.main()
