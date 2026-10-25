@@ -1231,3 +1231,26 @@ ordering and failed-cache-invalidation tests already write their complete
 device buffers; stale-slack/failed-write poison injection intentionally writes
 raw disk bytes and must not gain zeroFill semantics. Those are intentionally
 unchanged, not unconverted ordinary byte-write simulations.
+
+### Final headless verification for this correction
+
+All three full SwiftPM runs exited **0**, each with **17 probe/policy +
+42 actual-module glue + 30 bridge tests** (including every fixture-entry
+ntfscat comparison). Bridge suite durations were **393.011 s plain**,
+**492.966 s ASan**, and **461.874 s explicitly runtime-linked UBSan**.
+`otool -L` confirmed `@rpath/libclang_rt.ubsan_osx_dynamic.dylib` on the
+bridge test executable after the UBSan run. No sanitizer diagnostics were
+reported. Existing SDK completion-status optionality warnings remain;
+engine error messages from deliberate fault-injection cases are expected.
+
+Commands were the full `swift test --package-path Packages/NTFSCore`, the
+same with `--sanitize=address`, and the same with `--sanitize=undefined
+-Xlinker /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib`.
+All seven `scripts/test-*.py` suites also exited 0: **37 tests**
+(bench 4, policy/ops 16, install 4, phases 1, readonly 6, seqio 2,
+VM monitor 4). Durable output is under
+`build/qc-runs/20261025-vmrw-vr2/headless-rmw-{plain,asan,ubsan,python}.log`.
+
+The correction and these checks used no host image attachment, host mount,
+app build/registration/installation or push. They do **not** close the VM RW
+acceptance gate or claim that inaccessible kernel internals were reproduced.

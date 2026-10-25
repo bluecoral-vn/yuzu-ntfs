@@ -151,6 +151,56 @@ private final class Mounted {
         return bytes
     }
 }
+
+// Bridge counterpart of the real-handler cold-kernel model in CompletionTests:
+// READ mappings, not raw disk slack, supply the covering sector cache. Require
+// exact request coordinates, overlay the bytes, then persist whole sectors.
+private func kernelRMWWrite(_ mounted: Mounted, ref: UInt64, offset: UInt64,
+                            payload: Data, extents: some Collection<nb_extent>) throws {
+    let sector = UInt64(mounted.image.dev.sector_size)
+    var cursor = offset
+    for extent in extents {
+        try #require(extent.logical == cursor, "WRITE mapping does not start at request")
+        try #require(extent.kind == NB_EXT_DATA || extent.kind == NB_EXT_UNINIT)
+        try #require(extent.physical % sector == extent.logical % sector)
+        cursor += extent.length
+    }
+    try #require(cursor == offset + UInt64(payload.count))
+    let start = offset / sector * sector
+    let end = (cursor + sector - 1) / sector * sector
+    var attr = nb_attr()
+    try #require(mounted.api.nb_getattr!(mounted.volume, ref, 5, &attr) == 0)
+    var reads = [nb_extent](repeating: nb_extent(), count: 128), count = 0
+    try #require(mounted.api.nb_read_map_during_write!(mounted.volume, ref, start, end - start,
+                                                    &reads, reads.count, &count) == 0)
+    var cache = Data(count: Int(end - start))
+    cursor = start
+    for extent in reads.prefix(count) {
+        try #require(extent.logical == cursor, "READ mapping does not start at request")
+        if extent.kind == NB_EXT_DATA {
+            try cache.withUnsafeMutableBytes {
+                try #require(pread(mounted.image.fd, $0.baseAddress!.advanced(by: Int(cursor - start)),
+                                   Int(extent.length), off_t(extent.physical)) == Int(extent.length))
+            }
+        } else {
+            try #require(extent.kind == NB_EXT_HOLE || extent.kind == NB_EXT_UNINIT)
+        }
+        cursor += extent.length
+    }
+    try #require(cursor == end)
+    let eof = min(cache.count, Int(attr.size > start ? attr.size - start : 0))
+    cache.replaceSubrange(eof..<cache.count, with: repeatElement(0, count: cache.count - eof))
+    cache.replaceSubrange(Int(offset - start)..<Int(offset - start) + payload.count, with: payload)
+    for extent in extents {
+        let within = extent.physical % sector
+        let size = Int((within + extent.length + sector - 1) / sector * sector)
+        try cache.withUnsafeBytes {
+            try #require(pwrite(mounted.image.fd,
+                                $0.baseAddress!.advanced(by: Int(extent.logical - within - start)),
+                                size, off_t(extent.physical - within)) == size)
+        }
+    }
+}
 private final class Listing {
     var names: [String] = []
     var cookie: UInt64 = 0
@@ -368,13 +418,7 @@ struct BridgeConformanceTests {
         #expect(m.api.nb_blockmap!(m.volume, a.ref, 0, 1000003, 1, &extents, 4, &count) == 0)
         #expect(count > 0)
         let payload = Data(repeating: 0x5a, count: 1000003)
-        for e in extents.prefix(count) {
-            let begin = Int(e.logical), size = min(Int(e.length), payload.count - begin)
-            if size > 0 {
-                let wrote = payload.withUnsafeBytes { pwrite(m.image.fd, $0.baseAddress!.advanced(by: begin), size, off_t(e.physical)) }
-                try #require(wrote == size)
-            }
-        }
+        try kernelRMWWrite(m, ref: a.ref, offset: 0, payload: payload, extents: extents.prefix(count))
         try #require(m.api.nb_complete_io!(m.volume, a.ref, 0, UInt64(payload.count), 0, 1) == 0)
         try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
         try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
@@ -395,7 +439,7 @@ struct BridgeConformanceTests {
         try #require(m.api.nb_blockmap!(m.volume, a.ref, a.size, 7, 1, &extents, 4, &count) == 0)
         let marker = Data(repeating: 0xa5, count: 7)
         try #require(count == 1)
-        try #require(marker.withUnsafeBytes { pwrite(m.image.fd, $0.baseAddress, 7, off_t(extents[0].physical)) } == 7)
+        try kernelRMWWrite(m, ref: a.ref, offset: a.size, payload: marker, extents: extents.prefix(count))
         try #require(m.api.nb_complete_io!(m.volume, a.ref, a.size, 7, 0, 1) == 0)
         try #require(m.api.nb_unmount!(m.volume) == 0); m.volume = nil
         try #require(m.api.nb_mount!(&m.image.dev, 0, &m.volume) == 0)
@@ -566,11 +610,8 @@ struct BridgeConformanceTests {
         var extents = [nb_extent](repeating: nb_extent(), count: 128)
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, UInt64(expected.count), 1, &extents, extents.count, &count) == 0)
         #expect(extents.prefix(count).reduce(UInt64(0)) { $0 + $1.length } == UInt64(expected.count))
-        for e in extents.prefix(count) {
-            try #require(e.kind == NB_EXT_UNINIT)
-            let bytes = expected.subdata(in: Int(e.logical)..<Int(e.logical + e.length))
-            try #require(bytes.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(e.physical)) } == bytes.count)
-        }
+        #expect(extents.prefix(count).allSatisfy { $0.kind == NB_EXT_UNINIT })
+        try kernelRMWWrite(mounted, ref: attr.ref, offset: 0, payload: expected, extents: extents.prefix(count))
         try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, UInt64(expected.count), EIO, 1) == EIO)
         #expect(try mounted.lookup("/raw.bin").size == 8192)
         #expect(try mounted.read(mounted.lookup("/raw.bin")) == Data(count: 8192))
@@ -602,10 +643,8 @@ struct BridgeConformanceTests {
         }
         try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, UInt64(end), EIO, 1) == EIO)
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 1, &extents, extents.count, &count) == 0)
-        for e in extents.prefix(count) {
-            let bytes = payload.subdata(in: Int(e.logical) - offset..<Int(e.logical + e.length) - offset)
-            try #require(bytes.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, $0.count, off_t(e.physical)) } == bytes.count)
-        }
+        try kernelRMWWrite(mounted, ref: attr.ref, offset: UInt64(offset),
+                           payload: payload, extents: extents.prefix(count))
         try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, UInt64(offset), UInt64(payload.count), 0, 1) == 0)
         try #require(mounted.api.nb_unmount!(mounted.volume) == 0)
         mounted.volume = nil
@@ -629,7 +668,7 @@ struct BridgeConformanceTests {
         try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 23, 17, 1, &extent, 1, &count) == 0)
         try #require(count == 1)
         let replacement = [UInt8](repeating: 0xa5, count: 17)
-        try #require(replacement.withUnsafeBytes { pwrite(mounted.image.fd, $0.baseAddress, 17, off_t(extent.physical)) } == 17)
+        try kernelRMWWrite(mounted, ref: attr.ref, offset: 23, payload: Data(replacement), extents: [extent])
         try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 23, 17, 0, 1) == 0)
         try #require(mounted.api.nb_read!(mounted.volume, attr.ref, 23, &bytes, 17, &got) == 0)
         #expect(bytes == replacement)

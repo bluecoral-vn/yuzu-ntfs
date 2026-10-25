@@ -93,9 +93,12 @@ private final class CompletionDevice: YuzuNTFSDeviceAccess {
 @Test func untrackedWriteCompletionPreservesLandedPartialVDLBlock() throws {
     let device = try CompletionDevice(), volume = try device.volume()
     defer { volume.unmount {} }
+    device.mappingResource = try mappingResource()
     let (item, extent) = try device.partialVDLFile()
     let payload = [UInt8](repeating: 0xB6, count: 475)
-    try #require(pwrite(device.fd, payload, payload.count, off_t(extent.physical + 37)) == payload.count)
+    let mapping = try mapFixture(volume, item, offset: 37, length: 475, id: 0, write: true)
+    try kernelRMW(device, volume, item, mapping, offset: 37, bytes: payload)
+    device.purges.removeAll()
     var calls = 0, failure: (any Error)?
     volume.completeIO(for: item, offset: 37, length: 475, status: nil, flags: [.write], operationID: .unspecified) {
         calls += 1; failure = $0
@@ -197,7 +200,7 @@ private func mappedFixture(_ device: CompletionDevice, writable: Bool) throws ->
 }
 private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: off_t,
                         length: Int, id: Int, write: Bool = false,
-                        expectedType: FSExtentType = .data, mappedLength: Int? = nil) throws -> ReadMappingPacker {
+                        expectedType: FSExtentType = .data) throws -> ReadMappingPacker {
     let packer = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
     var calls = 0, failure: (any Error)?
     volume.blockmapFile(item, offset: offset, length: length, flags: write ? [.write] : [.read],
@@ -206,7 +209,12 @@ private func mapFixture(_ volume: YuzuNTFSVolume, _ item: YuzuNTFSItem, offset: 
     }
     #expect(calls == 1)
     try #require(failure == nil)
-    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == (mappedLength ?? length))
+    #expect(packer.ranges.reduce(0) { $0 + $1.2 } == length)
+    var cursor = offset
+    for (logical, _, size) in packer.ranges {
+        #expect(logical == cursor, "Mapping must start at the request, with contiguous later runs")
+        cursor += off_t(size)
+    }
     #expect(packer.types.allSatisfy { $0 == expectedType })
     return packer
 }
@@ -291,9 +299,9 @@ func readMappingDuringPartialVDLWritePreservesLandedBytes(readOffset: off_t) thr
     let device = try CompletionDevice(), volume = try device.volume()
     device.mappingResource = try mappingResource()
     let (item, extent) = try device.partialVDLFile() // VDL 37, EOF 8192.
-    _ = try mapFixture(volume, item, offset: 0, length: 512, id: 41, write: true)
+    let mapping = try mapFixture(volume, item, offset: 37, length: 475, id: 41, write: true)
     let payload = [UInt8](repeating: 0xB6, count: 475)
-    try #require(pwrite(device.fd, payload, payload.count, off_t(extent.physical + 37)) == payload.count)
+    try kernelRMW(device, volume, item, mapping, offset: 37, bytes: payload)
     let before = device.writes
     _ = try mapFixture(volume, item, offset: readOffset, length: 512, id: 42,
                        expectedType: readOffset == 0 ? .data : .zeroFill)
@@ -366,26 +374,67 @@ private func fixtureBytes(_ device: CompletionDevice, _ item: YuzuNTFSItem, leng
     return Array(bytes.prefix(got))
 }
 
-private func landPayload(_ device: CompletionDevice, _ packer: ReadMappingPacker,
-                         offset: off_t, bytes: [UInt8]) throws {
-    var written = 0
-    for (logical, physical, length) in packer.ranges {
-        #expect(logical % 512 == 0 && physical % 512 == 0 && length % 512 == 0)
-        let first = max(logical, offset), end = min(logical + off_t(length), offset + off_t(bytes.count))
-        if first < end {
-            let start = Int(first - offset), count = Int(end - first)
-            try bytes.withUnsafeBytes {
-                try #require(pwrite(device.fd, $0.baseAddress!.advanced(by: start), count,
-                                    physical + first - logical) == count)
+// Model cold kernel writeback, rather than pwrite(payload) into an idealized
+// mapping. FSKit's transfer buffer starts at the REQUEST offset: a response
+// that starts earlier does not authorize rebasing that buffer. Reject such a
+// response before I/O, including on reads. Fill covering device sectors from
+// READ-map DATA on disk or zeroFill, zero beyond the kernel's EOF, overlay the
+// payload, then write whole sectors through the exact WRITE translation.
+private func kernelRMW(_ device: CompletionDevice, _ volume: YuzuNTFSVolume,
+                       _ item: YuzuNTFSItem, _ packer: ReadMappingPacker,
+                       offset: off_t, bytes: [UInt8]) throws {
+    let sector = off_t(device.blockdev.sector_size)
+    var cursor = offset
+    for (index, range) in packer.ranges.enumerated() {
+        try #require(range.0 == cursor, "WRITE mapping does not start at request")
+        try #require(packer.types[index] == .data)
+        try #require(range.1 % sector == range.0 % sector)
+        cursor += off_t(range.2)
+    }
+    try #require(cursor == offset + off_t(bytes.count), "WRITE mapping exceeds request")
+    let start = offset - offset % sector
+    let end = ((offset + off_t(bytes.count) + sector - 1) / sector) * sector
+    var attr = nb_attr()
+    try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
+    let reader = class_createInstance(ReadMappingPacker.self, 0) as! ReadMappingPacker
+    var calls = 0, failure: (any Error)?
+    volume.blockmapFile(item, offset: start, length: Int(end - start), flags: [.read],
+                        operationID: FSOperationID(rawValue: 900), packer: reader) {
+        calls += 1; failure = $0
+    }
+    try #require(calls == 1 && failure == nil)
+    var cache = [UInt8](repeating: 0, count: Int(end - start))
+    cursor = start
+    for (index, range) in reader.ranges.enumerated() {
+        let (logical, physical, length) = range
+        try #require(logical == cursor, "READ mapping does not start at request")
+        cursor += off_t(length)
+        if reader.types[index] == .data {
+            try cache.withUnsafeMutableBytes {
+                try #require(pread(device.fd, $0.baseAddress!.advanced(by: Int(logical - start)),
+                                   length, physical) == length)
             }
-            written += count
+        } else {
+            try #require(reader.types[index] == .zeroFill)
         }
     }
-    #expect(written == bytes.count)
+    try #require(cursor == end, "READ mapping exceeds request")
+    let eof = min(cache.count, max(0, Int(attr.size) - Int(start)))
+    cache.replaceSubrange(eof..<cache.count, with: repeatElement(0, count: cache.count - eof))
+    cache.replaceSubrange(Int(offset - start)..<Int(offset - start) + bytes.count, with: bytes)
+    for (logical, physical, length) in packer.ranges {
+        let within = physical % sector
+        let count = Int(((within + off_t(length) + sector - 1) / sector) * sector)
+        let cacheOffset = Int(logical - within - start)
+        try cache.withUnsafeBytes {
+            try #require(pwrite(device.fd, $0.baseAddress!.advanced(by: cacheOffset),
+                                count, physical - within) == count)
+        }
+    }
 }
 
 @Test(arguments: [false, true])
-func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppend: Bool) throws {
+func residentAppendColdRMWPreservesPrefixAndCompletesObservedRange(readBeforeAppend: Bool) throws {
     let device = try CompletionDevice(), volume = try device.volume()
     defer { volume.unmount {} }
     device.mappingResource = try mappingResource()
@@ -400,12 +449,18 @@ func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppe
     #expect(attr.flags & UInt32(NB_RESIDENT) != 0)
     // The VM's read map promotes resident.txt before its offset=37,length=9 append.
     if readBeforeAppend { _ = try mapFixture(volume, item, offset: 0, length: 37, id: 5) }
-    let mapping = try mapFixture(volume, item, offset: 37, length: 9, id: 6, write: true, mappedLength: 512)
-    #expect(mapping.ranges.first?.0 == 0)
+    let mapping = try mapFixture(volume, item, offset: 37, length: 9, id: 6, write: true)
+    #expect(mapping.ranges.first?.0 == 37)
     try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
     #expect(attr.size == 37, "Mapping must not publish rounded allocation as EOF")
+    let promoted = try diskDataAttribute(device, path: "/resident.txt")
+    #expect(promoted.allocated == 4096 && promoted.data == 37 && promoted.initialized == 37)
+    let physical = try #require(mapping.ranges.first?.1)
+    var persistedPrefix = [UInt8](repeating: 0, count: 37)
+    try #require(pread(device.fd, &persistedPrefix, 37, physical - 37) == 37)
+    #expect(persistedPrefix == original, "Promotion must be durable before the write mapping returns")
     let payload = Array("P0-append".utf8)
-    try landPayload(device, mapping, offset: 37, bytes: payload)
+    try kernelRMW(device, volume, item, mapping, offset: 37, bytes: payload)
     var calls = 0
     volume.completeIO(for: item, offset: 0, length: 46, status: nil, flags: [.write], operationID: .unspecified) {
         calls += 1; #expect($0 == nil)
@@ -430,10 +485,10 @@ func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppe
     let (volume, item) = try mappedFixture(device, writable: true)
     defer { volume.unmount {} }
     let original = try fixtureBytes(device, item, length: 4_194_427)
-    let mapping = try mapFixture(volume, item, offset: 4_194_427, length: 9, id: 61, write: true, mappedLength: 512)
-    #expect(mapping.ranges.first?.0 == 4_194_304)
+    let mapping = try mapFixture(volume, item, offset: 4_194_427, length: 9, id: 61, write: true)
+    #expect(mapping.ranges.first?.0 == 4_194_427)
     let payload = Array("P0-append".utf8)
-    try landPayload(device, mapping, offset: 4_194_427, bytes: payload)
+    try kernelRMW(device, volume, item, mapping, offset: 4_194_427, bytes: payload)
     var calls = 0
     volume.completeIO(for: item, offset: 0, length: 4_194_436, status: nil, flags: [.write],
                       operationID: FSOperationID(rawValue: 61)) { calls += 1; #expect($0 == nil) }
@@ -444,7 +499,7 @@ func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppe
     #expect(try fixtureBytes(device, item, length: 4_194_437) == original + payload)
 }
 
-@Test func millionAndThreeByteWriteMapsAlignedAllocationButKeepsExactEOF() throws {
+@Test func millionAndThreeByteColdRMWKeepsExactEOF() throws {
     let device = try CompletionDevice(), volume = try device.volume()
     defer { volume.unmount {} }
     device.mappingResource = try mappingResource()
@@ -455,12 +510,11 @@ func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppe
     }
     let item = try #require(found as? YuzuNTFSItem)
     let payload = (0..<1_000_003).map { UInt8(truncatingIfNeeded: $0 * 17 + 3) }
-    let mapping = try mapFixture(volume, item, offset: 0, length: 1_000_003, id: 71,
-                                 write: true, mappedLength: 1_000_448)
+    let mapping = try mapFixture(volume, item, offset: 0, length: 1_000_003, id: 71, write: true)
     var attr = nb_attr()
     try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
     #expect(attr.size == 0)
-    try landPayload(device, mapping, offset: 0, bytes: payload)
+    try kernelRMW(device, volume, item, mapping, offset: 0, bytes: payload)
     var calls = 0
     volume.completeIO(for: item, offset: 0, length: 1_000_003, status: nil, flags: [.write],
                       operationID: FSOperationID(rawValue: 71)) { calls += 1; #expect($0 == nil) }
@@ -472,4 +526,110 @@ func residentAppendMapsWholeSectorAndCompletesObservedPrefixRange(readBeforeAppe
     #expect(try fixtureBytes(device, item, length: 1_000_004) == payload)
     try #require(nb_engine_e2()!.pointee.nb_getattr!(device.core, item.ref, item.parent, &attr) == 0)
     #expect(attr.size == 1_000_003)
+}
+
+// ntfsinfo reads the detached backing file, not E2's inode/page caches.
+private func diskDataAttribute(_ device: CompletionDevice, path: String) throws
+    -> (allocated: Int, data: Int, initialized: Int) {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let process = Process(), output = Pipe()
+    process.executableURL = root.appendingPathComponent("tools/bin/ntfsinfo")
+    process.arguments = ["-f", "-F", path, device.image.path]
+    process.standardOutput = output
+    try process.run()
+    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    try #require(process.terminationStatus == 0)
+    let attribute = try #require(text.components(separatedBy: "Dumping attribute $DATA").last)
+    func field(_ name: String) throws -> Substring {
+        let line = try #require(attribute.split(separator: "\n").first { $0.trimmingCharacters(in: .whitespaces).hasPrefix(name + ":") })
+        return try #require(line.split(separator: ":").last?.split(whereSeparator: { $0.isWhitespace }).first)
+    }
+    try #require(try field("Resident") == "No")
+    return (try #require(Int(field("Allocated size"))),
+            try #require(Int(field("Data size"))),
+            try #require(Int(field("Initialized size"))))
+}
+
+@Test func sdkPackerAcceptsExactByteCoordinates() throws {
+    // Narrow SDK characterization: the old A2 guard invented a start-alignment
+    // restriction. The real serializer accepts and retains byte coordinates.
+    let selector = NSSelectorFromString("initWithBlockmapFlags:")
+    let method = try #require(class_getInstanceMethod(FSExtentPacker.self, selector))
+    typealias Initialize = @convention(c) (AnyObject, Selector, UInt) -> AnyObject
+    let initialize = unsafeBitCast(method_getImplementation(method), to: Initialize.self)
+    let packer = initialize(class_createInstance(FSExtentPacker.self, 0)! as AnyObject,
+                            selector, FSBlockmapFlags.write.rawValue) as! FSExtentPacker
+    #expect(packer.packExtent(resource: try mappingResource(), type: .data,
+                             logicalOffset: 37, physicalOffset: 53_121_061, length: 9))
+    let data = try #require(packer.perform(NSSelectorFromString("extentDataByExtentsPacked"))?.takeUnretainedValue() as? Data)
+    try #require(data.count == 24, "SDK extent serialization layout changed")
+    #expect(data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self)) } == 9)
+    #expect(data.withUnsafeBytes { UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 8, as: UInt64.self)) } == 53_121_061)
+    #expect(data.withUnsafeBytes { UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 16, as: UInt64.self)) } == 37)
+}
+
+private func createRMWFixture(_ device: CompletionDevice, _ volume: YuzuNTFSVolume) throws -> YuzuNTFSItem {
+    device.mappingResource = try mappingResource()
+    var found: FSItem?
+    volume.createItem(named: FSFileName(string: "rmw.bin"), type: .file,
+                      inDirectory: YuzuNTFSItem(ref: 5, parent: 5), attributes: FSItem.SetAttributesRequest()) {
+        found = $0; #expect($2 == nil)
+    }
+    return try #require(found as? YuzuNTFSItem)
+}
+
+private func writePrefixAndGrow(_ device: CompletionDevice, _ volume: YuzuNTFSVolume,
+                                _ item: YuzuNTFSItem) throws {
+    let mapping = try mapFixture(volume, item, offset: 0, length: 37, id: 81, write: true)
+    try kernelRMW(device, volume, item, mapping, offset: 0, bytes: [UInt8](repeating: 0x41, count: 37))
+    var calls = 0
+    volume.completeIO(for: item, offset: 0, length: 37, status: nil, flags: [.write],
+                      operationID: FSOperationID(rawValue: 81)) { calls += 1; #expect($0 == nil) }
+    let growth = FSItem.SetAttributesRequest(); growth.size = 8192
+    volume.setAttributes(growth, on: item) { attributes, error in
+        calls += 1; #expect(error == nil && attributes?.size == 8192)
+    }
+    volume.synchronize(flags: .wait) { calls += 1; #expect($0 == nil) }
+    #expect(calls == 3)
+    let sizes = try diskDataAttribute(device, path: "/rmw.bin")
+    #expect(sizes.data == 8192 && sizes.initialized == 37)
+}
+
+@Test func thirtySevenByteColdRMWThenFtruncatePreservesPrefixAndZeroTail() throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    let item = try createRMWFixture(device, volume)
+    try writePrefixAndGrow(device, volume, item)
+    let expected = [UInt8](repeating: 0x41, count: 37) + [UInt8](repeating: 0, count: 8192 - 37)
+    #expect(try fixtureBytes(device, item, length: 8193) == expected)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 8193) == expected)
+}
+
+@Test(arguments: [off_t(211), off_t(6191)])
+func gapWriteColdRMWNeverZerosInitializedPrefix(offset: off_t) throws {
+    let device = try CompletionDevice(), volume = try device.volume()
+    defer { volume.unmount {} }
+    let item = try createRMWFixture(device, volume)
+    try writePrefixAndGrow(device, volume, item)
+    let payload = [UInt8](repeating: 0xB6, count: 659)
+    let mapping = try mapFixture(volume, item, offset: offset, length: payload.count, id: 82, write: true)
+    try kernelRMW(device, volume, item, mapping, offset: offset, bytes: payload)
+    var calls = 0
+    volume.completeIO(for: item, offset: offset, length: payload.count, status: nil, flags: [.write],
+                      operationID: FSOperationID(rawValue: 82)) { calls += 1; #expect($0 == nil) }
+    #expect(calls == 1)
+    var expected = [UInt8](repeating: 0, count: 8192)
+    expected.replaceSubrange(0..<37, with: repeatElement(0x41, count: 37))
+    expected.replaceSubrange(Int(offset)..<Int(offset) + payload.count, with: payload)
+    volume.unmount {}
+    let readOnly = try device.volume(writable: false)
+    defer { readOnly.unmount {} }
+    #expect(try fixtureBytes(device, item, length: 8193) == expected)
+    let sizes = try diskDataAttribute(device, path: "/rmw.bin")
+    #expect(sizes.data == 8192 && sizes.initialized == Int(offset) + payload.count)
 }
