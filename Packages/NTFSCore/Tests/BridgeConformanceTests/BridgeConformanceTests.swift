@@ -275,6 +275,33 @@ struct BridgeConformanceTests {
         #expect(try mounted.read(mounted.lookup("/deferred.bin")) == payload)
     }
 
+    @Test(arguments: [false, true]) func retainedWriteAfterCheckpointLeavesDurableDirtyMarker(remap: Bool) throws {
+        let mounted = try Mounted(.e2, "basic-512", write: true)
+        let name = Array("retained-dirty.bin".utf16)
+        var attr = nb_attr(), extent = nb_extent(), count = 0
+        try #require(mounted.api.nb_create!(mounted.volume, 5, name, name.count, NB_FILE, &attr) == 0)
+        try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, 4096, 1, &extent, 1, &count) == 0)
+        var payload = [UInt8](repeating: 0x71, count: 4096)
+        try #require(pwrite(mounted.image.fd, &payload, payload.count, off_t(extent.physical)) == payload.count)
+        try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 4096, 0, 1) == 0)
+        try #require(mounted.api.nb_sync!(mounted.volume) == 0)
+        var state = NB_UNSUPPORTED
+        try #require(mounted.api.nb_probe_state!(&mounted.image.dev, &state) == 0)
+        #expect(state == NB_CLEAN)
+        // Kernel reuses a mapping after the five-second/explicit checkpoint:
+        // no new blockmap/prepare may be delivered before this completion.
+        if remap {
+            try #require(mounted.api.nb_blockmap!(mounted.volume, attr.ref, 0, 4096, 1, &extent, 1, &count) == 0)
+        }
+        payload[0] = 0x72
+        try #require(pwrite(mounted.image.fd, &payload, payload.count, off_t(extent.physical)) == payload.count)
+        try #require(mounted.api.nb_complete_io!(mounted.volume, attr.ref, 0, 4096, 0, 1) == 0)
+        try #require(mounted.api.nb_dispose!(mounted.volume) == 0)
+        mounted.volume = nil // Simulate termination, not a clean checkpoint.
+        try #require(mounted.api.nb_probe_state!(&mounted.image.dev, &state) == 0)
+        #expect(state == NB_DIRTY_FLAG)
+    }
+
     @Test func shortRawCompletionZerosPartialBlockBeforeVDLPublication() throws {
         let m = try Mounted(.e2, "basic-512", write: true)
         let name = Array("partial-block.bin".utf16)

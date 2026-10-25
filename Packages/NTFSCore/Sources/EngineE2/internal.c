@@ -106,6 +106,24 @@ int e2_writeback_data(ntfs_inode_t *h)
     return err < 0 ? -err : err;
 }
 
+/* A checkpoint clears the volume marker while the kernel may retain maps.
+ * Re-arm it before publishing new metadata, including completions that arrive
+ * without another prepare call. Its record joins the payload durability flush. */
+static int mark_volume_dirty(struct ntfs_inode *ni)
+{
+    int err = 0;
+    if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY))
+        err = ntfs_set_volume_flags(ni->vol, VOLUME_IS_DIRTY);
+    struct inode *volume_inode = ni->vol->vol_ino;
+    if (!err && NInoDirty(NTFS_I(volume_inode))) {
+        err = __ntfs_write_inode(volume_inode, 1);
+        /* TT redirties an ENOMEM write for later retry and may return zero.
+         * Do not publish VDL while the required marker is still unwritten. */
+        if (!err && NInoDirty(NTFS_I(volume_inode))) err = -ENOMEM;
+    }
+    return err;
+}
+
 /* T7-R3/R4: empty new files and first data access on RW mounts must be
  * KOIO-capable. Inhibited resident streaming writes wedge macOS 27 before
  * issuing a byte-copy upcall. Existing RO resident files are never converted. */
@@ -117,8 +135,7 @@ int e2_promote(ntfs_inode_t *h)
     int err = e2_writable(h);
     if (!err && (NInoCompressed(ni) || NInoEncrypted(ni))) err = ENOTSUP;
     if (!err && !NInoNonResident(ni)) {
-        if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY))
-            err = ntfs_set_volume_flags(ni->vol, VOLUME_IS_DIRTY);
+        err = mark_volume_dirty(ni);
         if (!err) {
             mutex_lock(&ni->mrec_lock);
             err = ntfs_attr_make_non_resident(ni, (u32)ni->data_size);
@@ -189,10 +206,8 @@ int e2_prepare(ntfs_inode_t *h, uint64_t off, uint64_t len, int fail_after_alloc
     if (NInoSparse(ni)) { err = -EPERM; goto done; } /* F-R1: P1 materialization only. */
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
-    if (!(ni->vol->vol_flags & VOLUME_IS_DIRTY)) {
-        err = ntfs_set_volume_flags(ni->vol, VOLUME_IS_DIRTY);
-        if (err) goto done;
-    }
+    err = mark_volume_dirty(ni);
+    if (err) goto done;
     uint64_t old_init = ni->initialized_size;
     if (off + len > (uint64_t)ni->allocated_size) {
         mutex_lock(&ni->mrec_lock);
@@ -309,6 +324,8 @@ int e2_finish(ntfs_inode_t *h, uint64_t off, uint64_t len)
     if (!NInoNonResident(ni) || NInoCompressed(ni) || NInoEncrypted(ni)) { err = -ENOTSUP; goto done; }
     if (!len) goto done;
     if (off + len > (uint64_t)ni->allocated_size) { err = -EINVAL; goto done; }
+    err = mark_volume_dirty(ni);
+    if (err) goto done;
     uint64_t first = min_t(uint64_t, off, ni->initialized_size);
     err = invalidate_inode_pages2_range(vi->i_mapping, first / PAGE_SIZE, (off + len - 1) / PAGE_SIZE);
     if (err) goto done;
