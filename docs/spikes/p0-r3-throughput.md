@@ -7,10 +7,12 @@
 sector-covering KOIO fix passes resident append/remount, nonaligned
 1000003-byte copy/EOF/remount, VDL zero tails, ADS refusal and the documented
 retained-mapping RO boundary. Physical-SSD and macOS 26 acceptance remain
-pending. **Performance remains NO-GO:** latest shipping candidate `eb69b12`
-passes the full functional gate and mounts in 0.051 s under the explicitly
-authorized normal-QoS policy, but a genuine V-R4 disk-image-helper stop
-prevented five-run medians and reference comparisons. See
+pending. Latest candidate **`02d6d86` passes the full fresh-clone functional
+and exact-allocation gates**; see [Final delta fixes](#final-delta-fixes-2026-10-26).
+**Performance remains NO-GO:** latest measured transport `eb69b12` mounted
+in 0.051 s under authorized normal QoS, but a genuine V-R4 helper stop
+prevented five-run medians/reference comparisons. No replacement mounted
+performance claim is made for the exact-allocation candidate. See
 [Performance pass 2 (2026-10-25)](#performance-pass-2-2026-10-25).
 The pre-reboot kernel wedge and the failed intermediate candidates below
 are historical evidence, not the current mounted-functional verdict.
@@ -20,7 +22,7 @@ are historical evidence, not the current mounted-functional verdict.
 | macOS 27 internal-SSD image, raw backing file | 10,559.323 MiB/s median | 11,963.303 MiB/s median | Measured; not a physical-device baseline |
 | Historical `61e93f1` Yuzu KOIO, isolated VM | 1373.479 MiB/s, one sample | 168.142 MiB/s, one sample | Functional PASS under M-R1; performance NO-GO |
 | Historical Apple exFAT, isolated VM | 1894.688 MiB/s, one sample | 654.739 MiB/s, one sample | Partial comparison, not five-run medians |
-| Latest `eb69b12` Yuzu, normal QoS | 1572.311–2954.443 MiB/s, three samples | 455.582–982.128 MiB/s, four samples | Functional PASS; V-R4 stop; no five-run median or same-policy denominator |
+| Latest measured `eb69b12` Yuzu, normal QoS | 1572.311–2954.443 MiB/s, three samples | 455.582–982.128 MiB/s, four samples | Functional PASS; V-R4 stop; no five-run median or same-policy denominator |
 | macOS 27 Apple NTFS image | Not measured in VM | Read-only / N/A | No native-NTFS throughput claim |
 | Physical SSD, macOS 27 | PENDING-OWNER | PENDING-OWNER | No physical device used |
 | macOS 26 | PENDING-OWNER | PENDING-OWNER | No macOS 26 VM available |
@@ -2135,4 +2137,53 @@ consumed; file EOF and allocated bytes both **1048576**. Remounted allocation
 and payload matched. All attachments were normally detached and the RW
 allowlist was empty. No benchmark was requested in this delta wave; the
 earlier performance NO-GO is unchanged.
+
+### Final immutable release and pristine-clone acceptance
+
+Final candidate **`02d6d86a5e5b9aa4b231843a14c72f608e25420c`** includes the
+recursive installed-registration correction. Its compiled C/Swift sources
+are unchanged from the full 103-test × plain/ASan/linked-UBSan matrix above;
+the Python-only correction passed the complete 54-test Python matrix again.
+Release-Direct rebuilt at this exact identity, with both embedded commits
+and KOIO=true verified.
+
+Notarization **`6a2b146f-2390-45fa-a7db-e02351c47d50` Accepted**; staple,
+staple validation, strict codesign, Gatekeeper and ZIP integrity all passed.
+Final retained archive:
+`build/qc-runs/20261026-final-delta/final-release/YuzuNTFS-02d6d86-stapled.zip`.
+Module SHA-256:
+`d9bd0455ad34cf4edb7f393b189a3405dc328a4c429ea227e99400052c367e0a`.
+Archive SHA-256:
+`0a646e684b57dd87afd7fab653b60a28ff16b147385f4a73f7427d0c6b841bfc`.
+
+The preliminary clone was normally disabled/shut down and deleted **before**
+creating its replacement from stopped `yuzu-qc-27-dev`; never two owned
+clones concurrently. The replacement exercised the final automated installer
+on a pristine guest: both real absence cases were handled, recursive
+registration ran from the installer, installed UUID was
+`35028F1E-ABE8-4CF3-8518-5F5B2ED33157`, and signed-probe readiness passed.
+**No staged preregistration, manual installed-registration repair or
+post-install enablement workaround was used in this final run.**
+Only its exact virtualization helper received background task policy.
+The actual safety-monitor Python process was observed with UID 0; all
+V-R1..V-R4 deadlines and ownership rules were unchanged.
+
+**Final fresh-clone VM acceptance: PASS**, UUID
+`0c326703-3512-41d6-a290-f49788b8a358`.
+All unchanged RO/RW/M-R1 cases passed before the D1 capacity check.
+The additional 1 MiB write/fsync/close again measured free bytes
+**258179072 → 257130496**: exactly **1048576 consumed**, **1048576 file
+allocated**, **1048576 EOF**. Detach/RO-remount payload and allocation passed.
+Final inventory had an empty RW allowlist and no attached images.
+Evidence: `guest-final-evidence.zip`; the preliminary successful core proof
+and failed invocation attempt are retained separately.
+
+Normal no-active-volume disable passed, followed by normal guest shutdown,
+exact host-service removal and exact clone stop/delete. No forced unmount,
+filesystem-daemon kill, host installation or host-agent refresh occurred.
+Final `lume ls` shows only the three stopped goldens; other sessions and
+goldens were untouched. Own unpacked build registrations/products, payload,
+DerivedData, temporary host drivers and duplicate notary-submission ZIPs
+were removed. Final signed archives, QC logs and reproducible guest driver
+inside the evidence ZIP remain. No push occurred.
 
