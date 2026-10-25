@@ -914,6 +914,14 @@ No push was performed.
 
 ### Headless correction — byte-shaped append blockmaps (2026-10-25)
 
+**Superseded by the VR2 corruption correction below.** The EINVAL diagnosis
+was correct, but widening the requested mapping was not a valid fix. A2's
+alignment requirement concerns internal extent split points, not an arbitrary
+byte-shaped request's first or last byte. The real SDK serializer accepts
+byte offsets and lengths. The payload-only tests described here did not model
+the kernel's request-origin transfer buffer or cold-sector RMW.
+
+
 The first failure is now traced to the **A2 extent-start alignment guard in
 `YuzuNTFSVolume.blockmapFile`**, not resident promotion or successful-completion
 range validation. In `guest-artifacts.zip`, the first run's `rw-callbacks.log`
@@ -934,14 +942,13 @@ and without the preceding read promotion) and a non-resident append at EOF
 4194427. A 1000003-byte write separately exposed its non-block-sized packed tail.
 Focused RED: artifact 889; focused GREEN: artifact 891.
 
-Write mappings now prepare and pack the covering full device sectors:
-`[37,46)` maps `[0,512)` and `[0,1000003)` maps `[0,1000448)`. This retains the
-aligned-extent guard rather than weakening it. The macOS 27 SDK's
-`FSVolumeExtent.h:67–71` explicitly permits `.data` extents in
-`[EOF, allocated space]`, because the kernel tracks EOF; it does not require
-the requested byte range to be sector-aligned. Rounding uses checked arithmetic.
-Only the unchanged completion byte range advances EOF/VDL, never the padded
-mapping, and no callback wait or additional reply is introduced.
+The `ad91731` candidate prepared and packed covering device sectors:
+`[37,46)` became `[0,512)` and `[0,1000003)` became `[0,1000448)`.
+Although the SDK permits DATA beyond EOF, that permission does **not**
+authorize moving the start of the kernel's requested transfer. VR2 below
+demonstrated that this widening was corrupting, despite passing those tests.
+The correction now keeps both mapping coordinates and length exact; only
+allocation and the kernel's underlying device I/O are sector-rounded.
 
 The observed `(0,46)` completion is valid even though the map requested `(37,9)`;
 it need not exactly match a mapping range. Its failed status 22 is propagated
@@ -1093,3 +1100,134 @@ hook remained. Guest shutdown returned expected tcpShutdown, guest runner
 and host launchctl service were removed, final clone was deleted and the
 payload share removed. Prior rerun clones were also deleted. Goldens and
 host installation were not modified; no push.
+
+## VR2 corruption analysis and exact-coordinate correction (2026-10-25)
+
+### What the saved evidence actually contains
+
+The archived `rw.img` was extracted under the ignored
+`build/qc-runs/20261025-vmrw-vr2/extracted/` directory and inspected without
+attachment or an OS filesystem mount. `tools/bin/ntfsinfo -v -F /resident.txt`
+reports MFT 64, unnamed $DATA **nonresident**, allocated/data/initialized
+sizes **4096/46/46**, and the single run **VCN 0 -> LCN 0x32a9, length 1**.
+The cluster size is 4096, so its physical byte offset is **53121024**.
+A raw read at that address independently shows `P0-append` followed by zeros;
+this is not only an ntfscat/cache interpretation. The golden $DATA is resident
+with 37 bytes and no runlist.
+
+VR2 retained callback ranges, but **did not log packed extents, operation IDs
+or per-callback inode sizes**. There is no separate complete VR2 module log:
+`final-evidence.log` is the post-failure log/sample collection, and the zip's
+`rw-callbacks.log` is the live P0 callback log. The guest was already destroyed,
+so these fields cannot be recovered as direct observations. The following
+packed tuples are reconstructed from that log, the exact `ad91731` mapping
+implementation and the detached runlist; they must not be described as
+observed packet captures.
+
+| Guest timestamp / PID | Observed callback | Reconstructed packed (logical, physical, length, FSKit type) / effect |
+|---|---|---|
+| 01:08:44.704 / 1252 | WRITE map (0,36) | (0,53116928,512,DATA), first fsevents UUID **[INFERENCE]** |
+| 01:08:44.707 / 1252 | WRITE complete (0,36) | Exact EOF/VDL 36; zero tail [36,512) |
+| 01:08:45.387 / 1252 | READ map (0,37) | resident.txt promotion; (0,53121024,37,DATA) |
+| 01:08:45.393 / 1252 | WRITE map (37,9) | **(0,53121024,512,DATA)**, not the requested byte origin |
+| 01:08:45.393 / 1252 | WRITE complete (0,46) | Exact EOF/VDL 46; no VDL-to-offset gap; zero tail [46,512) |
+| 01:08:48.060 / 1311 | WRITE map (0,36) | (0,53125120,512,DATA), recreated fsevents UUID **[INFERENCE]** |
+| 01:08:48.061 / 1311 | WRITE complete (0,36) | Exact EOF/VDL 36; zero tail [36,512) |
+| 01:08:48.616 / 1311 | READ map (0,46) | (0,53121024,46,DATA), corrupted resident.txt on remount |
+
+The fsevents attributions are not invented file identities in the callback
+log: that log has none. They are supported by the 36-byte UUID left at LCN
+0x32a8 and the final `.fseventsd/fseventsd-uuid` at LCN 0x32aa (MFT 72,
+sequence 2, allocated/data/initialized 4096/36/36). Only those two incidental
+file attributions/first-run allocation remain inferential. No read completion
+was logged. The earlier VM run's full `module-log.log:891-898` establishes
+the previous failure shape: write maps (37,9), IDs 6/7, replied EINVAL 22;
+their unspecified-ID completions (0,46) propagated ioStatus 22.
+
+### Root cause and the competing hypotheses
+
+The earlier fix confused allocation/block alignment with the range described
+to FSKit. A byte append's transfer buffer still starts at file byte 37.
+Returning a first extent at logical 0 / physical cluster start changes the
+physical origin of that transfer. The detached result places its nine bytes
+exactly **37 bytes too early**. The following 37 logical bytes are zeros in
+both detached snapshots. The controller's kernel model therefore treats the
+first returned physical address as the start of the requested buffer; it
+does not silently rebase that buffer to rescue a mismatching logical origin.
+The exact internal kernel zero-buffer sequence is **[INFERENCE]**, not exposed
+by these user-space callback logs; a new VM run remains the real oracle.
+
+An in-process probe of the **real macOS 27 FSExtentPacker**, not the capture
+subclass, accepts `(logical:37, physical:53121061, length:9)` and serializes
+those exact values. The old A2 rejection was our own guard, not an SDK
+rejection. Both read and write responses now start exactly at their request;
+subsequent extents are contiguous, and physical/logical intra-sector offsets
+must agree. Internal splits remain aligned, including the UINT32-sized batch
+limit, without rounding either request boundary.
+
+The other proposed causes were checked rather than patched speculatively:
+
+- **Promotion persistence / initialized size:** real-handler/E2 tests inspect
+  raw backing-file bytes **before returning to simulated writeback**, and
+  invoke external ntfsinfo while the headless engine is open. Promotion has
+  already persisted the original 37 bytes and $DATA sizes 4096/37/37.
+  E2's existing conversion -> fsync and device flush/purge order is retained;
+  no unproven second promotion implementation or upstream patch was added.
+- **READ mapping zeroFill of [0,37):** the covering READ mapping is DATA through
+  the partial VDL sector, and the RMW model actually reads it from disk.
+  Above VDL it honors zeroFill and kernel-known EOF. Removing promotion
+  persistence or returning zeroFill for the prefix breaks readback.
+- **T5-R2 completion zeroing:** the observed completion starts at 0, below
+  pre-existing VDL 37, so `[VDL,offset)` is empty. Its partial-tail zeroing
+  starts at 46, not 0 or 9. It cannot explain erasure inside `[0,46)`.
+  R-R1's non-mutating read route during a write lease and T5-R2's exact
+  completion/tail semantics are unchanged.
+
+These headless checks exclude the proposed E2 cache/VDL causes in the tested
+device model; they do not claim direct observation of the destroyed guest's
+pre-write metadata cache. Future P0 logs now include operation ID and every
+packed logical/physical/length/type, so the VM retry need not infer them.
+
+### Explicit kernel RMW test contract and audit
+
+The real handlers and E2 still operate on copied disposable NTFS images.
+Only the SDK construction/packer boundary is supplied in process. A cold
+kernel write is now modeled as:
+
+1. Require the first WRITE extent's logical start to equal the original
+   request offset, and every later run to be contiguous. Require its total
+   length to equal the request. A widened response fails with
+   **"WRITE mapping does not start at request"** before unsafe I/O.
+2. Obtain the real handler's READ mapping for all covering device sectors.
+   Enforce the same exact-start/contiguity rule for those READ responses.
+3. Populate whole-sector cache buffers using DATA bytes from raw disk and
+   zeroFill as zeros; zero bytes beyond the kernel's known EOF.
+4. Overlay the user's bytes at their original file offset, then write the
+   **entire covering sectors**, using the exact WRITE translation. Complete
+   only the reported byte range, synchronize and check offline remount bytes.
+
+This deliberately does not reproduce the kernel by an ideal `pwrite` of only
+the payload, nor "correct" an invalid mapping by compensating its offset.
+An exploratory logical-address-rebased RMW model passed the broken candidate:
+that was evidence the model was too permissive, **not** a successful corruption
+reproduction. The strict model's pre-fix RED (artifact 960) failed resident
+append in both promotion orders, nonresident unaligned-EOF append, and the
+1000003-byte copy's oversized mapping. Focused GREEN is artifact 962.
+The RED pins the rejected request-origin contract; it is not claimed to be
+a byte-for-byte replay of inaccessible kernel internals.
+
+Converted important payload-only regressions in both actual-handler and
+bridge tests: resident append, nonresident EOF 4194427 append, 1000003-byte
+new/shrunk/allocated writes, partial-VDL tracked/untracked completion,
+unaligned cached-edge overwrite and the poisoned 3 MiB+5-byte gap write.
+Added actual-handler RMW-37 -> ftruncate-8192 -> remount, plus gap writes at
+211 and 6191 with initialized-prefix, gap, payload and tail preservation.
+Before append writeback the test also checks durable original bytes and
+external ntfsinfo's initialized size, rather than trusting E2's cached reads.
+
+Every remaining direct test pwrite was classified: block-device transport
+callbacks are infrastructure; full-sector/full-4096-byte writes in lifetime,
+ordering and failed-cache-invalidation tests already write their complete
+device buffers; stale-slack/failed-write poison injection intentionally writes
+raw disk bytes and must not gain zeroFill semantics. Those are intentionally
+unchanged, not unconverted ordinary byte-write simulations.

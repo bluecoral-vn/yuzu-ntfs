@@ -361,7 +361,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         } catch { reply(0, error) }
     }
     func blockmapFile(_ file: FSItem, offset: off_t, length: Int, flags: FSBlockmapFlags, operationID: FSOperationID, packer: FSExtentPacker, replyHandler reply: @escaping ((any Error)?) -> Void) {
-        Self.p0Log.info("blockmapFile offset=\(offset) length=\(length) write=\(flags.contains(.write))")
+        Self.p0Log.info("blockmapFile offset=\(offset) length=\(length) write=\(flags.contains(.write)) operationID=\(operationID.rawValue)")
         guard Self.validRange(offset: offset, length: length) else { reply(POSIXError(.EINVAL)); return }
         guard let item = file as? YuzuNTFSItem else { reply(POSIXError(.EINVAL)); return }
         // Only explicit writes need a lease to protect their extents from
@@ -384,19 +384,12 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 }
                 let sector = UInt64(device.blockdev.sector_size)
                 guard sector > 0 else { throw POSIXError(.EINVAL) }
-                var mappingOffset = UInt64(offset), mappingLength = UInt64(length)
-                if flags.contains(.write) && length > 0 {
-                    // FSKit can request a byte append (e.g. [37,46)), not
-                    // sector-aligned I/O. Supply the covering allocated blocks;
-                    // FSVolumeExtent.h permits .data beyond EOF (lines 69–71).
-                    // Only completeIO's original byte range may advance EOF/VDL.
-                    let end = mappingOffset + mappingLength
-                    let tail = end % sector
-                    let alignedEnd = try YuzuNTFSBoundary.adding(end, tail == 0 ? 0 : sector - tail)
-                    _ = try YuzuNTFSBoundary.offset(alignedEnd)
-                    mappingOffset -= mappingOffset % sector
-                    mappingLength = alignedEnd - mappingOffset
-                }
+                // The request's first byte is also the kernel transfer buffer's
+                // first byte. Never widen/rebase it to a sector boundary: an
+                // append at 37 must map physical cluster start + 37, not start.
+                // Byte starts/ends are valid; only internal splits need alignment.
+                let mappingOffset = UInt64(offset), mappingLength = UInt64(length)
+                var packedOffset = mappingOffset
                 // io remains locked: no write can acquire/release a lease
                 // between this decision and partial-VDL mapping/zeroing.
                 try YuzuNTFSMapping.map(api: api, core: core, ref: item.ref, offset: mappingOffset, length: mappingLength,
@@ -407,24 +400,22 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                         let end = try YuzuNTFSBoundary.adding(extent.logical, extent.length)
                         _ = try YuzuNTFSBoundary.offset(end)
                         _ = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, extent.length))
-                        guard extent.logical % sector == 0,
-                              extent.kind == NB_EXT_HOLE || extent.physical % sector == 0 else { throw POSIXError(.EINVAL) }
-                        if end % sector != 0 {
-                            var attr = nb_attr()
-                            try check(api.nb_getattr!(core, item.ref, item.parent, &attr))
-                            guard end == attr.size || (flags.contains(.write) && end > attr.size) else { throw POSIXError(.EINVAL) }
-                        }
+                        guard extent.logical == packedOffset, extent.length > 0,
+                              extent.kind == NB_EXT_HOLE || extent.physical % sector == extent.logical % sector else { throw POSIXError(.EINVAL) }
                         var done: UInt64 = 0
                         while done < extent.length {
-                            let chunk = min(extent.length - done, UInt64(UInt32.max) & ~UInt64(4095))
+                            let logicalValue = try YuzuNTFSBoundary.adding(extent.logical, done)
+                            let chunk = min(extent.length - done, (UInt64(UInt32.max) & ~UInt64(4095)) - logicalValue % sector)
                             let zero = extent.kind == NB_EXT_HOLE || (extent.kind == NB_EXT_UNINIT && !flags.contains(.write))
-                            let logical = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.logical, done))
+                            let logical = try YuzuNTFSBoundary.offset(logicalValue)
                             let physical = try YuzuNTFSBoundary.offset(YuzuNTFSBoundary.adding(extent.physical, done))
                             guard let resource = device.extentResource else { throw POSIXError(.ENODEV) }
+                            Self.p0Log.info("packExtent ref=\(item.ref) operationID=\(operationID.rawValue) logical=\(logical) physical=\(physical) length=\(chunk) zeroFill=\(zero)")
                             if !packer.packExtent(resource: resource, type: zero ? .zeroFill : .data,
                                 logicalOffset: logical, physicalOffset: physical, length: Int(chunk)) { return false }
                             done += chunk
                         }
+                        packedOffset = end
                     }
                     return true
                 }
@@ -438,7 +429,7 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     // SDK 27 incorrectly annotates status nonnull; its own contract specifies
     // nil for success. Keep Optional to avoid trapping on successful I/O.
     func completeIO(for file: FSItem, offset: off_t, length: Int, status: (any Error)?, flags: FSCompleteIOFlags, operationID: FSOperationID, replyHandler reply: @escaping ((any Error)?) -> Void) {
-        Self.p0Log.info("completeIO offset=\(offset) length=\(length) write=\(flags.contains(.write))")
+        Self.p0Log.info("completeIO offset=\(offset) length=\(length) write=\(flags.contains(.write)) operationID=\(operationID.rawValue)")
         guard Self.validRange(offset: offset, length: length) else { reply(POSIXError(.EINVAL)); return }
         guard let item = file as? YuzuNTFSItem else { reply(POSIXError(.EINVAL)); return }
         do {
