@@ -7,18 +7,20 @@
 sector-covering KOIO fix passes resident append/remount, nonaligned
 1000003-byte copy/EOF/remount, VDL zero tails, ADS refusal and the documented
 retained-mapping RO boundary. Physical-SSD and macOS 26 acceptance remain
-pending. **Performance is NO-GO:** latest candidate `2efc262` passes the full
-functional gate, but its 8 GiB benchmark mount took 31.957 s and V-R4 stopped
-an owned disk-image helper before any transfer row. See
-[Performance pass (2026-10-25)](#performance-pass-2026-10-25).
+pending. **Performance remains NO-GO:** latest shipping candidate `eb69b12`
+passes the full functional gate and mounts in 0.051 s under the explicitly
+authorized normal-QoS policy, but a genuine V-R4 disk-image-helper stop
+prevented five-run medians and reference comparisons. See
+[Performance pass 2 (2026-10-25)](#performance-pass-2-2026-10-25).
 The pre-reboot kernel wedge and the failed intermediate candidates below
 are historical evidence, not the current mounted-functional verdict.
 
 | Gate/environment | Read | Write | Verdict |
 |---|---:|---:|---|
 | macOS 27 internal-SSD image, raw backing file | 10,559.323 MiB/s median | 11,963.303 MiB/s median | Measured; not a physical-device baseline |
-| macOS 27 Yuzu KOIO, isolated VM | 1373.479 MiB/s, one sample | 168.142 MiB/s, one sample | Functional PASS under M-R1; performance NO-GO |
-| macOS 27 Apple exFAT, isolated VM | 1894.688 MiB/s, one sample | 654.739 MiB/s, one sample | Partial comparison, not five-run medians |
+| Historical `61e93f1` Yuzu KOIO, isolated VM | 1373.479 MiB/s, one sample | 168.142 MiB/s, one sample | Functional PASS under M-R1; performance NO-GO |
+| Historical Apple exFAT, isolated VM | 1894.688 MiB/s, one sample | 654.739 MiB/s, one sample | Partial comparison, not five-run medians |
+| Latest `eb69b12` Yuzu, normal QoS | 1572.311–2954.443 MiB/s, three samples | 455.582–982.128 MiB/s, four samples | Functional PASS; V-R4 stop; no five-run median or same-policy denominator |
 | macOS 27 Apple NTFS image | Not measured in VM | Read-only / N/A | No native-NTFS throughput claim |
 | Physical SSD, macOS 27 | PENDING-OWNER | PENDING-OWNER | No physical device used |
 | macOS 26 | PENDING-OWNER | PENDING-OWNER | No macOS 26 VM available |
@@ -1635,6 +1637,10 @@ host agent refresh, security-policy change or push was performed.
 
 ## Performance pass (2026-10-25)
 
+This section records the first implementation pass. The final shipping
+candidate, repeated functional gate, controlled-QoS measurements and cleanup
+are recorded in [Performance pass 2](#performance-pass-2-2026-10-25).
+
 ### Headless profiling and bounded changes
 
 Source before this pass: `40e6b73` (functional transport `61e93f1`).
@@ -1914,4 +1920,124 @@ open-file inspection. V-R1..V-R4, phase deadlines and mount-only grace are
 unchanged. A regression first reproduced the unnecessary inspection, and
 all seven Python suites then passed (49 tests). The signed `eb69b12` app
 is immutable; this correction changes only its external QC monitor.
+
+### Final code verification and controlled QoS
+
+The committed shipping code `eb69b120bd781998a5e3b538115497a9c1000b9d`
+passed full plain, ASan and explicitly linked UBSan matrices:
+**17 probe + 50 actual-module glue + 35 bridge tests each**. Bridge
+durations were **415.420 / 548.686 / 616.612 seconds**. The runtime link
+was confirmed with otool; no sanitizer findings occurred. Existing SDK
+completion-status optionality and pristine-TT warnings remain.
+The monitor-only correction `1dacf66` subsequently passed the full Python
+matrix, **49 tests**; it does not change the shipping app binary.
+
+Release-Direct build, strict signature and Gatekeeper checks passed.
+Notarization **`a35918ad-7610-409f-8ffb-3d77abb1753b` Accepted**, then
+stapled and ZIP-integrity verified. Both embedded commits match `eb69b12`,
+KOIO=true. Module executable SHA-256:
+`20533ce5e82cfba5e83ac0bca15b0854df4cac7ffce8012f52ac69754fe9a6ff`.
+The host's generated registrations were removed and unpacked products
+archived/deleted; the host installation and agent were unchanged.
+
+A background-QoS fresh-clone rerun encountered guest-wide infrastructure
+delays before reaching RW acceptance: even ps exceeded its ten-second
+monitor deadline and the host SSH observer exceeded thirty seconds.
+Read-only basic-image hash preservation had passed; the names mount was
+interrupted. This is not counted as a functional or performance pass.
+Normal detach/eject of its surviving attachment reported busy; only that
+disposable clone was shut down/deleted, without forced unmount or daemon kill.
+
+With all host builds finished, the controller explicitly authorized normal
+QoS (`taskpolicy -B`) for **only the owned virtualization helper**, verified
+by its open clone-disk path, during timed Yuzu/native-NTFS/exFAT/raw rows.
+Another fresh clone was provisioned for this comparison so background-QoS
+partial rows are not mixed into its medians. Other VMs were untouched.
+The same normal QoS is held across every comparison driver; background
+policy is restored after measurement. Policy evidence is
+`normal-qos-fresh-policy.json`; the V-R1..V-R4 rules remain unchanged.
+
+### Final normal-QoS functional gate and timed rows
+
+The replacement clone passed the **full unchanged functional acceptance**
+again at `eb69b12`: RO basic/names/bigdir manifest and image hashes,
+100000-entry enumeration, resident append/remount, exact 1000003-byte
+copy/EOF/remount, VDL zero tails/remount, ADS refusal, pre-latch FD EROFS
+and all M-R1 retained-mapping callback/oracle/remount assertions.
+Acceptance UUID: `276afe4d-0cf3-43b2-9066-fd3af43192ec`.
+Actual `blockmapFile`/`completeIO` callback evidence was required and observed.
+Evidence: `normal-qos-yuzu-final-guest-evidence.zip`.
+
+All following timed rows used the same normal-QoS helper policy. They are
+individual completed samples, **not five-run medians**. Historical rows
+above used a different run/policy and are not valid current denominators.
+
+| Run | 4 GiB write seconds / MiB/s | 4 GiB read seconds / MiB/s |
+|---|---:|---:|
+| 1 | 4.170534 / 982.128 | 1.386387 / 2954.443 |
+| 2 | 8.022591 / 510.558 | 1.474344 / 2778.185 |
+| 3 | 7.306372 / 560.607 | 2.605082 / 1572.311 |
+| 4 | 8.990692 / 455.582 | NOT REACHED |
+| 5 | NOT REACHED | NOT REACHED |
+
+Initial 8 GiB mount: **0.051235 s**. Completed remounts:
+**0.197829–0.581500 s**. The earlier background-QoS transport run mounted
+in 2.691257 s versus 31.957127 s for the previous transport; the final
+normal-QoS result is kept separate, not attributed wholly to a code change.
+Headless transport-call-count regressions above isolate the code correction.
+
+After write 4, the root monitor recorded owned `diskimages-helper` PID
+1311 continuously U for **20.8 s**, exceeding V-R4's unchanged 20-second
+limit. The extension-only mount exception does not apply to this helper.
+This is a genuine safety stop, not the redundant-lsof infrastructure error.
+The benchmark revoked authorization first and stopped; durable rows,
+process ownership, samples and capture outcomes are preserved.
+The evidence does **not** establish whether the surviving image attachment
+is a driver or backing-image/platform problem.
+
+| Spec §6 workload | Latest observed result | Target | Verdict |
+|---|---|---|---|
+| Sequential read, 4 GiB | Three samples above; no median | ≥100% Apple NTFS | **NOT VERIFIED**; native denominator not reached |
+| Sequential write, 4 GiB | Four samples above; no median | ≥90% exFAT | **NOT VERIFIED**; exFAT denominator not reached |
+| Copy 10000 × 4 KiB | NOT REACHED | ≤1.5× exFAT | **NOT VERIFIED** |
+| ls -l 100000 | NOT REACHED | ≤1.2× exFAT | **NOT VERIFIED** |
+| rm -rf 100000 | NOT REACHED | ≤1.5× exFAT | **NOT VERIFIED** |
+| 8 GiB mount | 0.051235 s initial; 0.197829–0.581500 s remounts | Compare same-policy exFAT | Improved observed latency; ratio **NOT VERIFIED** |
+| Same-guest raw / Apple NTFS / exFAT | NOT RUN | Five-run reference rows | **NOT VERIFIED**, no historical-denominator substitution |
+
+The prepared reference entry was not launched: normal unmount succeeded,
+but normal detach/eject remained **Resource busy**. The documented
+no-active-FSKit-volume disable/current-user-agent refresh also succeeded
+without releasing the attachment; a subsequent normal eject still failed.
+Starting another workload would violate the quiescent preflight.
+Following the owner's wrap-up instruction, no further replacement clone
+or optimization iteration was started. This is a profiled, regression-tested
+functional candidate, **not completed performance acceptance**.
+
+### Final cleanup and retained artifact
+
+The owned serial was revoked and the force-RO hook removed before cleanup.
+The helper was re-identified by its exact open clone-disk path and restored
+with `taskpolicy -b` **before shutdown**; restoration exit status was zero.
+Evidence: `normal-qos-restored-policy.json`. No other helper was changed.
+Only the disposable guest was shut down (expected NIOSSH tcpShutdown),
+its exact host launch service removed, and its exact clone stopped/deleted.
+No forced unmount or filesystem-daemon kill occurred.
+Final `lume ls` shows only the three stopped goldens; all goldens and other
+sessions' VMs were untouched.
+
+The read-only payload, own DerivedData, detached headless 8 GiB image,
+temporary host observer and own temporary sample were removed.
+Guest services, surviving attachment and temporary comparison entry
+disappeared with the disposable clone. The host installation and agent were
+unchanged; generated build registrations were already removed.
+No push occurred.
+
+Retained archive: `YuzuNTFS-eb69b12-stapled.zip` under this pass's evidence
+directory, with the accepted notarization and module identity above.
+Retained evidence includes both full matrices, real-adapter red/green
+regressions, mount profiles/counters, all interrupted-run disclosures,
+functional/callback logs, the seven completed sequential samples,
+V-R4 ownership/stop evidence, failed normal cleanup attempts, background
+policy restoration, exact clone/service removal and final VM inventory.
 
