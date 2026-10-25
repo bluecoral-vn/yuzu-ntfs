@@ -19,6 +19,7 @@ import uuid
 
 from bench_supervisor import supervise
 from p0_ops import ROOT, MODULE, SUPPORT, ALLOW, Runner, require, allowlist, empty_allowlist, is_vm, preflight
+from p0_vm_monitor import wait_for_owned_io
 
 RESIDENT_SHA = '4b2720d37f921134bfbb2deb27137d6f08fc55ced90f88c4971f5f42e06e1fc6'
 HOOK = SUPPORT / 'p0-force-ro'
@@ -458,13 +459,11 @@ def main():
                   lambda: ro_acceptance(runner, ro_image, evidence / (fixture.stem + '-ro-mount'), evidence, fixture))
         def final_inventory():
             empty_allowlist()
-            processes = runner.run('ps', '-axo', 'pid=,state=,command=')
-            require(not any('U' in line.split(None, 2)[1] for line in processes.splitlines() if line.strip()),
-                    'State-U process after RO acceptance')
+            wait_for_owned_io(runner, [evidence, ROOT / 'build/r3', ROOT / 'build/baseline'])
             inventory = plistlib.loads(runner.run('hdiutil', 'info', '-plist').encode())
             require(not any(Path(item.get('image-path', '')).is_relative_to(evidence) for item in inventory.get('images', [])),
                     'Acceptance image attachment survived cleanup')
-            print('RO cleanup PASS: empty RW allowlist; no owned attachments; no state-U processes', flush=True)
+            print('RO cleanup PASS: empty RW allowlist; no owned attachments; no persistent owned state-U processes', flush=True)
         phase('RO final inventory', serial, args.timeout, final_inventory)
         if args.allow_host_readonly:
             print('RO SUBSET PASS; no RW/benchmark performed')

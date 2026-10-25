@@ -2041,3 +2041,55 @@ functional/callback logs, the seven completed sequential samples,
 V-R4 ownership/stop evidence, failed normal cleanup attempts, background
 policy restoration, exact clone/service removal and final VM inventory.
 
+## Final delta fixes (2026-10-26)
+
+Reviewed base `9e6183a`; findings D1–D4 and controller ruling D-R1.
+Evidence directory: `build/qc-runs/20261026-final-delta/`.
+
+- **D1 (`ab87d49`): exact allocation, not trim.** The 8 MiB reservation
+  survived close/reclaim/unmount. P0 does not have a lease-aware retirement
+  lifecycle, so the permitted exact-allocation alternative removes the
+  reservation rather than freeing potentially kernel-mappable ranges.
+  No bridge ABI, lease or completion ordering changed. Real-image red tests
+  observed 8388608 allocated bytes for a closed 1048576-byte file; green
+  tests cover exact mapping growth, hold/release, RW/RO remount/readback and
+  cumulative 100-file free-space use below 102 MiB.
+- **D2: bounded monitor commands.** Hypervisor inspection, ps, lsof and
+  diagnostic capture now use the existing file-backed, deadline-polling
+  `p0_ops.Runner`. Deadline termination does not block-reap a U child;
+  surviving PID/PGID and the failed command remain in the evidence.
+  A stuck-diagnostic stand-in first failed on the old subprocess.run path,
+  then returned at its deadline without exposing a wait/reap method.
+  Supervisor termination/revoke-before-signal and V-R1..V-R4 are unchanged.
+- **D3: final RO inventory uses V-R4.** The same ownership/open-file and
+  20-second continuous-wait policy now applies to final inventory.
+  Unrelated U is informational; owned transient waits may finish and
+  persistent owned waits fail. Empty RW allowlist and owned-attachment
+  assertions remain. The actual nested final-inventory regression first
+  rejected recorded unrelated homeeventsd U, then passed.
+- **D4: fresh-guest registration absence.** Scoped extensions absent from
+  PlugInKit inventory are not unregistered. Parent-app unregister accepts
+  only exit 1 plus the exact scoped `failed to scan <app>: -10814`
+  LaunchServices absence diagnostic (optional `from spotlight` suffix).
+  Other errors still stop. The runner now carries exit status/output in a
+  RuntimeError subclass so absence cannot hide an unrelated failure.
+  Separate red/green fresh-plugin and fresh-parent tests exercise actual
+  temporary-bundle archive/isolation; a non-absence unregister failure
+  remains fatal.
+
+All three Python regression suites failed first for their reported defects,
+then all seven Python suites passed, **54 tests**. The three targeted real
+bridge D1 regressions also failed first and then passed.
+
+| Five-run POSIX bridge microbenchmark median | Reservation | Exact allocation |
+|---|---:|---:|
+| 64 MiB sequential write + sync | 23.378 ms | 20.471 ms |
+| 64 blockmaps | 0.330 ms | 0.283 ms |
+| 64 completions | 12.891 ms | 12.469 ms |
+| 256 small-file create/write/close operations | 31.672 ms | 33.549 ms |
+
+No sequential penalty was observed in this headless workload; timing
+variation is not attributed to an exact-allocation speedup. These are not
+mounted throughput, physical-device or exFAT/native-reference claims.
+Streaming reservation is no longer part of the P0 candidate.
+

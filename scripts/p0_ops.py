@@ -98,6 +98,13 @@ def recovered(boot_output, process_output):
     require(int(match[1]) > WEDGED_AT or not any('U' in row[1] for row in rows), 'No reboot and state-U processes remain')
 
 
+class CommandFailed(RuntimeError):
+    def __init__(self, args, returncode, output):
+        super().__init__(f'Command failed ({returncode}): {shlex.join(args)}')
+        self.returncode = returncode
+        self.output = output
+
+
 class Runner:
     def __init__(self, dry=False, timeout=30, new_session=True):
         self.dry = dry
@@ -134,7 +141,8 @@ class Runner:
             diagnostics = errors.read().decode(errors='replace')
         print(diagnostics, end='', file=sys.stderr, flush=True)
         print(text, end='', flush=True)
-        require(child.returncode in allowed, f'Command failed ({child.returncode}): {shlex.join(args)}')
+        if child.returncode not in allowed:
+            raise CommandFailed(args, child.returncode, text + diagnostics)
         # Plist consumers need machine-readable stdout, but diagnostic commands
         # such as codesign -dvv intentionally return their result on stderr.
         return text if '-plist' in args else text + diagnostics
@@ -345,8 +353,19 @@ def install(runner, staged, expected_commit):
         bundles = known_bundles(staged, records)
     for app in bundles:
         extension = app / 'Contents/Extensions/YuzuNTFSModule.appex'
-        runner.run('pluginkit', '-r', extension)
-        runner.run(LSREGISTER, '-u', app)
+        if runner.dry or any(record['path'] == str(extension) for record in records):
+            runner.run('pluginkit', '-r', extension)
+        else:
+            print('Already absent from PlugInKit inventory:', extension)
+        try:
+            runner.run(LSREGISTER, '-u', app)
+        except CommandFailed as error:
+            # kLSApplicationNotFoundErr, exactly as observed on fresh guests.
+            absent = re.fullmatch(r'failed to scan ' + re.escape(str(app)) +
+                                  r': -10814\s*(?:from spotlight)?', error.output.strip())
+            require(error.returncode == 1 and absent is not None,
+                    'LaunchServices unregister failed: ' + str(error) + '\n' + error.output)
+            print('Already absent from LaunchServices:', app)
     runner.run('ditto', staged, APP, timeout=120)
     if not runner.dry:
         installed_commit, installed_digest = bundle_metadata(APP)

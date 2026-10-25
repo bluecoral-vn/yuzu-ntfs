@@ -7,11 +7,28 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import ast
+from types import SimpleNamespace
 import p0_guest_acceptance as guest
 from p0_ops import Runner
 
 
 class ReadOnlyAcceptance(unittest.TestCase):
+    def test_final_inventory_allows_unrelated_u_process(self):
+        def run(*command, **kwargs):
+            if command[0] == 'ps':
+                return '877 U /System/Library/PrivateFrameworks/HomeKitEvents.framework/Support/homeeventsd\n'
+            if command[0] == 'lsof':
+                return ''
+            return plistlib.dumps({'images': []}).decode()
+        source = Path(guest.__file__).read_text()
+        inventory = next(node for node in ast.walk(ast.parse(source))
+                         if isinstance(node, ast.FunctionDef) and node.name == 'final_inventory')
+        namespace = dict(vars(guest), runner=SimpleNamespace(run=run),
+                         evidence=Path('/owned/evidence'), empty_allowlist=lambda: None)
+        exec(compile(ast.Module(body=[inventory], type_ignores=[]), guest.__file__, 'exec'), namespace)
+        namespace['final_inventory']()
+
     def test_fskit_mount_identity_with_missing_diskutil_fields(self):
         # diskutil fields observed on the failed 2026-10-25 FSKit mount;
         # mount syntax follows the recorded mount(8) inventory format.

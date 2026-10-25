@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+from p0_ops import Runner
 
 class UStateMonitor:
     def __init__(self, owned_paths):
@@ -45,6 +46,33 @@ class UStateMonitor:
             (stops if owned and now - since >= limit else info).append(message)
         self.waits = current
         return stops, info
+
+def inspect_open_paths(inspection, processes, monitor):
+    paths = {}
+    for row in processes.splitlines():
+        fields = row.split(None, 2)
+        # Known command ownership is conclusive; inspect only unknown waits.
+        if len(fields) == 3 and 'U' in fields[1] and not monitor.command_owned(fields[2]):
+            opened = inspection.run('lsof', '-b', '-a', '-p', fields[0], '-Fn', allowed=(0, 1), timeout=5)
+            paths[int(fields[0])] = [line[1:] for line in opened.splitlines() if line.startswith('n')]
+    return paths
+
+
+def wait_for_owned_io(inspection, owned_paths):
+    """Final inventory uses the same V-R4 persistence policy as live sampling."""
+    monitor = UStateMonitor(owned_paths)
+    while True:
+        processes = inspection.run('ps', '-axo', 'pid=,state=,command=', timeout=10)
+        paths = inspect_open_paths(inspection, processes, monitor)
+        stops, info = monitor.observe(processes, time.monotonic(), paths)
+        for message in info:
+            print('INFO final inventory ' + message, flush=True)
+        if stops:
+            raise RuntimeError('\n'.join(stops))
+        if not any(owned for _, _, owned, _ in monitor.waits):
+            return
+        time.sleep(1)
+
 
 def benchmark_mount_active(text, root):
     """V-R3: only an actual mount command for our exact 8 GiB bench images."""
@@ -90,9 +118,9 @@ def capture_stop(root, process_text):
             output.write('+ ' + ' '.join(command) + '\n')
             output.flush()
             try:
-                subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=12)
-            except subprocess.TimeoutExpired:
-                output.write('Evidence command deadline exceeded\n')
+                output.write(Runner().run(*command, timeout=12))
+            except (OSError, RuntimeError) as error:
+                output.write('Evidence command failed: ' + str(error) + '\n')
 
 
 def main():
@@ -100,7 +128,8 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--entry', default='p0_guest_acceptance.py')
     args = parser.parse_args()
-    if subprocess.check_output(['sysctl', '-n', 'kern.hv_vmm_present'], text=True).strip() != '1':
+    inspection = Runner()
+    if inspection.run('sysctl', '-n', 'kern.hv_vmm_present', timeout=10).strip() != '1':
         parser.error('VM-only acceptance launcher')
     root = args.root.resolve(strict=True)
     if os.geteuid() != 0:
@@ -119,28 +148,18 @@ def main():
         while child.poll() is None:
             sampled_at = time.monotonic()
             try:
-                result = subprocess.run(['ps', '-axo', 'pid=,state=,command='], capture_output=True, text=True, check=True, timeout=10)
-                paths = {}
-                for row in result.stdout.splitlines():
-                    fields = row.split(None, 2)
-                    # Command/path ownership is already conclusive. lsof on
-                    # that blocked worker cannot add information and may itself
-                    # block; unknown processes still require fail-closed inspection.
-                    if len(fields) == 3 and 'U' in fields[1] and not monitor.command_owned(fields[2]):
-                        opened = subprocess.run(['lsof', '-b', '-a', '-p', fields[0], '-Fn'], capture_output=True, text=True, timeout=5)
-                        if opened.returncode not in (0, 1):
-                            raise RuntimeError('Cannot inspect U-process cwd/open files: ' + opened.stderr)
-                        paths[int(fields[0])] = [line[1:] for line in opened.stdout.splitlines() if line.startswith('n')]
-                info_mount = benchmark_mount_active(result.stdout, root)
-                stops, info = monitor.observe(result.stdout, time.monotonic(), paths, mounting_benchmark=info_mount)
+                processes = inspection.run('ps', '-axo', 'pid=,state=,command=', timeout=10)
+                paths = inspect_open_paths(inspection, processes, monitor)
+                info_mount = benchmark_mount_active(processes, root)
+                stops, info = monitor.observe(processes, time.monotonic(), paths, mounting_benchmark=info_mount)
                 for message in info:
                     observations.write('INFO transient ' + message + '\n')
                 observations.flush()
                 if time.monotonic() > deadline:
                     stops.append('TOTAL DEADLINE')
                 if stops:
-                    (root / 'build/safety-stop.txt').write_text('\n'.join(stops) + '\n' + result.stdout)
-                    capture_stop(root, result.stdout)
+                    (root / 'build/safety-stop.txt').write_text('\n'.join(stops) + '\n' + processes)
+                    capture_stop(root, processes)
                     child.send_signal(signal.SIGTERM)
                     break
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

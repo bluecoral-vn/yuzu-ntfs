@@ -1,27 +1,44 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import unittest
-import ast
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
+from unittest.mock import patch
+import p0_ops
 import p0_vm_monitor
 from p0_vm_monitor import UStateMonitor
 
 class RecordedProcessStates(unittest.TestCase):
+    def test_stuck_diagnostic_returns_at_deadline_without_blocking_reap(self):
+        child = SimpleNamespace(pid=4242, poll=lambda: None)
+        launches = []
+        def start(*args, **kwargs):
+            self.assertGreaterEqual(kwargs['stdout'].fileno(), 0)
+            self.assertGreaterEqual(kwargs['stderr'].fileno(), 0)
+            launches.append(args)
+            return child
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'build').mkdir()
+            with patch.object(p0_vm_monitor.subprocess, 'run', side_effect=AssertionError('subprocess.run can block-reap a U child')), \
+                 patch.object(p0_ops.subprocess, 'Popen', side_effect=start), \
+                 patch.object(p0_ops.time, 'monotonic', side_effect=[0, 13]), \
+                 patch.object(p0_ops.os, 'killpg') as terminate:
+                p0_vm_monitor.capture_stop(root, '')
+            self.assertEqual(len(launches), 1)
+            terminate.assert_called_once()
+            self.assertIn('PID/PGID=4242', (root / 'build/pre-stop-evidence.log').read_text())
+
     def test_known_owned_u_worker_skips_redundant_lsof_but_unknown_is_inspected(self):
-        source = Path(p0_vm_monitor.__file__).read_text()
-        loop = next(node for node in ast.walk(ast.parse(source))
-                    if isinstance(node, ast.For) and ast.unparse(node.iter) == 'result.stdout.splitlines()')
         calls = []
-        def inspect(command, **kwargs):
-            calls.append(command)
-            return SimpleNamespace(returncode=0, stdout='n/owned/mount/file\n', stderr='')
-        namespace = dict(paths={}, monitor=UStateMonitor(['/owned/mount']),
-                         result=SimpleNamespace(stdout='2376 U /owned/mount/seqio write file\n88 U /usr/libexec/mds'),
-                         subprocess=SimpleNamespace(run=inspect))
-        exec(compile(ast.Module(body=[loop], type_ignores=[]), p0_vm_monitor.__file__, 'exec'), namespace)
+        def inspect(*command, **kwargs):
+            calls.append(list(command))
+            return 'n/owned/mount/file\n'
+        paths = p0_vm_monitor.inspect_open_paths(SimpleNamespace(run=inspect),
+            '2376 U /owned/mount/seqio write file\n88 U /usr/libexec/mds',
+            UStateMonitor(['/owned/mount']))
         self.assertEqual(calls, [['lsof', '-b', '-a', '-p', '88', '-Fn']])
-        self.assertEqual(namespace['paths'], {88: ['/owned/mount/file']})
+        self.assertEqual(paths, {88: ['/owned/mount/file']})
 
     def test_recorded_homeeventsd_transient_is_info(self):
         monitor = UStateMonitor(['/Users/lume/yuzu-ntfs/build/p0-guest'])

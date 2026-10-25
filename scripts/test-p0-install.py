@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
+import sys
 
 import p0_ops as ops
 
@@ -58,6 +59,39 @@ class FakeRunner:
 
 
 class InstallerIsolation(unittest.TestCase):
+    def fresh_absence(self, plugin=False, parent=False, fatal=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); repo = root / 'repo'
+            temporary = root / 'tmp'; temporary.mkdir()
+            staged = repo / 'build/release/Yuzu NTFS.app'
+            installed = root / 'Applications/Yuzu NTFS.app'
+            bundle(staged)
+            class FreshRunner(FakeRunner):
+                def run(self, *command, **kwargs):
+                    args = [str(value) for value in command]
+                    if args[:2] == ['pluginkit', '-r'] and plugin:
+                        raise RuntimeError('absent plugin must not be unregistered')
+                    if args[:2] == [str(ops.LSREGISTER), '-u'] and parent:
+                        message = f'failed to scan {staged}: {-50 if fatal else -10814}\n from spotlight'
+                        return ops.Runner().run(sys.executable, '-c', f'print({message!r}); raise SystemExit(1)')
+                    text = super().run(*command, **kwargs)
+                    return text.replace(record(staged), '') if plugin and args[:2] == ['pluginkit', '-mADvvv'] else text
+            runner = FreshRunner(installed, staged)
+            with patch.object(ops, 'ROOT', repo), patch.object(ops, 'QC_TEMP', temporary), patch.object(ops, 'DERIVED_DATA', root / 'DerivedData'), patch.object(ops, 'APP', installed), patch.object(ops, 'APPEX', installed / 'Contents/Extensions/YuzuNTFSModule.appex'), patch.object(ops, 'preflight'), patch.object(ops, 'set_enabled'):
+                ops.install(runner, staged, COMMIT)
+            self.assertFalse(staged.exists())
+            self.assertTrue(installed.exists())
+
+    def test_fresh_guest_absent_plugin_is_isolated_without_unregister(self):
+        self.fresh_absence(plugin=True)
+
+    def test_fresh_guest_absent_parent_app_10814_is_isolated(self):
+        self.fresh_absence(parent=True)
+
+    def test_parent_app_other_unregister_failure_is_fatal(self):
+        with self.assertRaises(RuntimeError):
+            self.fresh_absence(parent=True, fatal=True)
+
     def test_install_archives_duplicates_and_staged_only_after_verified_copy(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -101,7 +135,7 @@ class InstallerIsolation(unittest.TestCase):
                 refresh.assert_called_once()
             self.assertFalse(external.exists())
             self.assertTrue(external.parent.exists(), 'must preserve DerivedData directory')
-            self.assertIn(['pluginkit', '-r', str(external / 'Contents/Extensions/YuzuNTFSModule.appex')], runner.commands)
+            self.assertNotIn(['pluginkit', '-r', str(external / 'Contents/Extensions/YuzuNTFSModule.appex')], runner.commands)
             self.assertIn([str(ops.LSREGISTER), '-u', str(external)], runner.commands)
             self.assertEqual(len(list((repo / 'build/archive').glob('*.zip'))), 2)
 
