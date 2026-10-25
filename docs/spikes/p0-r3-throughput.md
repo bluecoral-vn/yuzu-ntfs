@@ -833,3 +833,81 @@ No EBUSY or timeout occurred. DeviceFS remained absent from mount inventories
 and was unaffected. hdiutil's attach/detach deprecation warnings remain benign
 diagnostics. These results close only this host RO subset, not RW, VM,
 writeback/completion or throughput gates. No physical media or push was used.
+
+## VM RW acceptance (2026-10-25)
+
+**FAIL / R3 VM-provisional NO-GO.** Ran only inside disposable clone
+`yuzu-qc-run-ntfs-20261025-rw` of stopped golden `yuzu-qc-27-dev`.
+Guest: macOS 27.0.1 **26A434**, arm64, **4 vCPU / 12 GiB RAM / 80 GB**
+virtio-backed disk; `kern.hv_vmm_present=1`. This is not physical-SSD evidence.
+The VM was launched through host launchctl with a read-only payload share and
+all Virtualization VM processes were assigned background task policy.
+
+The installed host candidate was zipped with `ditto --keepParent` (the original
+staged app had already been archived by installation), copied into the guest,
+and installed using unchanged `p0-install.sh --expected-commit
+7381280eb695465a60e5516d272b6ba11cda99ce`. Executable SHA-256 matched
+`99afd94e43102b83c853972e7208307884fe12bccc58693d2e1444ff7ad720eb`;
+signature/Gatekeeper passed; installed UUID
+`14B0B7EE-EBD3-4003-A699-58EA20290389`; team-signed FSClientProbe reported
+**enabled=true** at the exact installed path. No host install, refresh, mount,
+RW authorization or filesystem workload was performed.
+
+Guest prerequisites/anomalies: the golden has no command-line developer tools,
+so its `/usr/bin/python3` is an installation stub. A copied Homebrew Python 3.15
+framework executable supplied the runtime inside the disposable guest; no keys
+or notary credentials were shared. Raw runtime symlinks produced virtio-fs
+`Too many levels of symbolic links`; the actual versioned framework executable
+worked. The share was unmounted before preflight because AppleVirtIOFS is not
+an allowed transport during agent refresh. Initial installer stopped safely at
+`pluginkit -r` for an unregistered staged extension; explicitly registering that
+staged extension in guest GUI session allowed the unchanged installer to finish.
+An 8 GiB detached regular NTFS bench image was created with guest `mkntfs`.
+
+| Acceptance check | Observed result |
+|---|---|
+| RO basic/names/bigdir | PASS: manifest hashes, exactly 100000 entries, unchanged image hashes, clean detach and final empty allowlist/no-U inventory |
+| RW resident append prerequisite | **FAIL:** `resident.write(b'P0-append'); resident.flush()` raised `OSError: [Errno 22] Invalid argument` |
+| 1000003-byte cp/stat/cmp/remount/EOF | NOT REACHED |
+| KOIO blockmap + completeIO acceptance | NOT PROVEN; failure precedes required copy |
+| VDL 37 + ftruncate 8192 / remount | NOT REACHED |
+| ADS refusal | NOT REACHED |
+| Force-RO open FD / mmap / remount readback | NOT REACHED |
+
+The first evidence run was
+`6c009676-d800-4782-a918-3cdb12adcfb4`. The guest launchctl submit service
+unexpectedly restarted the completed failing command: subsequent RO-only
+attempt directories are `94c6a843-471a-4e62-84a2-b860f0f8467d` and
+`1044501b-a389-42ba-98f4-b0ade11f17d0`. These are **not** successful retries
+or additional RW acceptance. At the first observation, guest `mds_stores`
+PID 325 was `Us`; execution was stopped, then the launchctl service removed
+to prevent further restarts. No timed-out cp or persistent RW-U process was
+observed. The safety stop is mandatory even though later samples showed
+mds_stores waiting and its U state was transient; causation is not established.
+Future guest runners must be one-shot (or remain alive after recording their
+exit) rather than a launchctl-submit command that exits and gets relaunched.
+
+| Driver | Runs | Seq read/write 4 GiB | Copy 10k x 4 KiB | ls/rm 100k |
+|---|---:|---|---|---|
+| Yuzu KOIO | 0 | NOT RUN | NOT RUN | NOT RUN |
+| Apple exFAT, same guest disk type | 0 | NOT RUN | NOT RUN | NOT RUN |
+| Raw guest backing file | 0 | NOT RUN | N/A | N/A |
+
+Benchmarks were withheld because acceptance failed; no rates, ratios or
+performance pass can be inferred. Physical SSD and macOS 26 remain pending.
+
+Evidence: `build/qc-runs/20261025-vmrw/` contains install/dry-run transcripts,
+complete first-failure log in `acceptance-observation.log`, final stop and
+process/image inventories, mds_stores and module stack samples embedded in
+`final-stop.log` / `acceptance-final.log`, unified fskitd/module logs, and
+`guest-artifacts.zip` containing callback logs (no guest `.ips` was present).
+Logs include FSKit's missing `maxFileSizeInBits/maxFileSize` warning and
+deactivation `close_kernel_fd` / unregister status `-536870212`; no root cause
+or fix is claimed.
+
+Cleanup: final guest inventory showed no attached images and an empty RW
+allowlist. Requested guest shutdown returned the expected NIOSSH tcpShutdown.
+Host launchctl service was removed; an immediate delete raced shutdown, then
+Lume cleared its stale run lock and **deleted the clone successfully**.
+The fresh host payload share was removed; goldens and evidence were retained.
+No push was performed.
