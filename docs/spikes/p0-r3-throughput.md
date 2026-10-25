@@ -973,3 +973,36 @@ exited 0. The existing SDK completion-optionality warning remains.
 All six Python suites passed **33 tests** using
 `for file in scripts/test-*.py; do python3 "$file" || exit; done`
 (bench 4, install 4, phases 1, readonly 6, policy/ops 16, seqio 2).
+
+## VM RW acceptance rerun (2026-10-25)
+
+Candidate `ad91731a05332dcd35b2589dedb61646da7255f8` built Release-Direct
+successfully, notarization `1a047664-9519-425f-9f04-f20f57809c91` Accepted,
+stapled, strict signature/Gatekeeper verified. Both git identities matched,
+KOIO=true and AppIcon metadata/resource were present; module SHA-256
+`7832c147fdd584b3b52ea01d208d17875a01e07b56d04afc6e76edb9089cf494`.
+No host installation was performed. Guest macOS 27.0.1 / 26A434, 4 vCPU,
+12 GiB RAM, 80 GB virtio disk, cloned from `yuzu-qc-27-dev`.
+
+First rerun clone `yuzu-qc-run-ntfs-20261025-rerun` installed the candidate,
+reported enabled=true, then the old overly broad monitor stopped immediately
+on unrelated `homeeventsd` PID 877 state U, before any filesystem phase.
+Evidence/stacks: `build/qc-runs/20261025-vmrw-rerun/`.
+The guest shut down, launchctl service was removed and clone deleted.
+
+**Controller ruling V-R1:** unrelated transient U is ordinary disk wait.
+`scripts/p0_vm_monitor.py` samples every two seconds and immediately stops
+for acceptance/module/benchmark processes or processes whose arguments,
+cwd or open files reference owned test paths. Any unrelated process
+continuously U for at least 20 seconds also stops; shorter waits are logged
+as informational. A process leaving U or changing identity resets its timer.
+The root VM-only monitor inspects open files but runs acceptance as the
+worktree owner, records status, and remains idle until launchctl removal
+to prevent automatic reruns. Example inside the guest:
+
+```sh
+sudo /Users/lume/bin/python3 scripts/p0_vm_monitor.py --root /Users/lume/yuzu-ntfs
+```
+
+Four recorded-state Python regression tests passed (transient homeeventsd,
+continuous mds_stores, reset/PID reuse, and owned command/open-path cases).
