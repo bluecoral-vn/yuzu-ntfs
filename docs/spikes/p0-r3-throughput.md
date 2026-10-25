@@ -7,7 +7,8 @@
 sector-covering KOIO fix passes resident append/remount, nonaligned
 1000003-byte copy/EOF/remount, VDL zero tails, ADS refusal and the documented
 retained-mapping RO boundary. Physical-SSD and macOS 26 acceptance remain
-pending. Benchmark results and their separate V-R3 mount-time rule are
+pending. **Performance is NO-GO:** the partial V-R4 benchmark and its
+separate V-R3 mount-time rule are
 reported in [Append corruption root cause (2026-10-25)](#append-corruption-root-cause-2026-10-25).
 The pre-reboot kernel wedge and the failed intermediate candidates below
 are historical evidence, not the current mounted-functional verdict.
@@ -15,8 +16,8 @@ are historical evidence, not the current mounted-functional verdict.
 | Gate/environment | Read | Write | Verdict |
 |---|---:|---:|---|
 | macOS 27 internal-SSD image, raw backing file | 10,559.323 MiB/s median | 11,963.303 MiB/s median | Measured; not a physical-device baseline |
-| macOS 27 Yuzu KOIO, isolated VM | Functional PASS | Functional PASS under M-R1 | Performance: V-R3 benchmark section below |
-| macOS 27 Apple exFAT, isolated VM | V-R3 benchmark below | V-R3 benchmark below | Comparison uses the same guest virtual disk type |
+| macOS 27 Yuzu KOIO, isolated VM | 1373.479 MiB/s, one sample | 168.142 MiB/s, one sample | Functional PASS under M-R1; performance NO-GO |
+| macOS 27 Apple exFAT, isolated VM | 1894.688 MiB/s, one sample | 654.739 MiB/s, one sample | Partial comparison, not five-run medians |
 | macOS 27 Apple NTFS image | Not measured in VM | Read-only / N/A | No native-NTFS throughput claim |
 | Physical SSD, macOS 27 | PENDING-OWNER | PENDING-OWNER | No physical device used |
 | macOS 26 | PENDING-OWNER | PENDING-OWNER | No macOS 26 VM available |
@@ -1576,4 +1577,58 @@ latencies and prevents a later stop from losing already-measured rows.
 Recorded regressions first reproduced both the unrelated-daemon false stop
 and the missing durable row. All Python suites pass: **46 tests**,
 `python-vr4.log`. The extension executable remains unchanged.
+
+
+### Final V-R4 results — functional PASS, performance NO-GO
+
+Fresh clone `yuzu-qc-run-append-vr4-20261025` installed the unchanged
+61e93f1 artifact with matching identity/hash and enabled=true. Prior
+M-R1 acceptance artifacts were carried as immutable evidence and checked
+before Yuzu admission; no mounted functional assertion was skipped.
+
+Apple exFAT completed the initial mount and the first 4 GiB write/read
+pair, then V-R4 stopped its owned Python worker in U for **20.3 seconds**
+during the 10000-file copy. Its volume was cleanly unmounted/detached and
+quiescent preflight passed before the still-unconsumed Yuzu benchmark was
+started once on that same fresh clone. Yuzu also completed its first
+4 GiB write/read pair, then stopped on its owned Python worker in U for
+**20.7 seconds** during the 10000-file copy. Neither stop is attributed
+to an unrelated daemon or misclassified as a proven deadlock.
+
+| Observed row | Yuzu KOIO | Apple exFAT |
+|---|---:|---:|
+| Initial 8 GiB image mount | 0.765255 s | 1.079029 s |
+| Remount before sequential write | 5.800813 s | 1.589152 s |
+| Sequential write, exactly 4 GiB, F_NOCACHE + fsync | 168.142 MiB/s (24.360399 s) | 654.739 MiB/s (6.255923 s) |
+| Remount before sequential read | 24.910834 s | 2.309846 s |
+| Sequential read, exactly 4 GiB, F_NOCACHE | 1373.479 MiB/s (2.982208 s) | 1894.688 MiB/s (2.161834 s) |
+| Extension CPU sample mean, write / read | 7.56% / 6.72% | N/A |
+| 10000 × 4 KiB copy | STOP, owned worker U 20.7 s | STOP, owned worker U 20.3 s |
+| 100000-entry ls / rm | NOT REACHED | NOT REACHED |
+
+These are **one completed sequential pair per driver**, not five-run
+medians or completed full benchmark runs. The single-pair Yuzu/Apple ratios
+are **25.68% write** and **72.49% read**; neither is a physical-device
+result or evidence of meeting the 90% throughput target. Guest raw-file
+comparison was **NOT REACHED**. No unmeasured rate, median or ratio is
+invented. Mount latency variability (including the earlier ~41-second
+mount) is retained as a separate P1 finding rather than hidden in I/O timing.
+
+Durable rows: `bench-yuzuntfs.log`, `bench-exfat.log`;
+full logs/samples/inventories: `vr4-final-guest-artifacts.zip`,
+`vr4-final-prestop-and-inventory.log`, `vr4-bench-observed.log`,
+`vr4-yuzu-observed.log`, and `vr4-baseline-prestop.log`.
+The full Swift matrices remain 17 + 44 + 30 passing tests each in plain,
+ASan and linked UBSan; final Python matrix is **46 passing tests**.
+R3 remains **VM-provisional performance NO-GO**, with the append corruption
+fixed and the full functional gate passed under the explicit M-R1 policy.
+
+Final guest cleanup cleanly unmounted and detached the owned benchmark
+image, verified an empty RW allowlist and absent force-RO hook, and shut
+down only the owned clone. All owned experiment/oracle/benchmark clones,
+launch services and the transient shared payload were then removed; final
+Lume inventory contains only the three stopped golden VMs. The host
+artifact HTTP service was stopped. See `cleanup-summary.txt` and
+`final-host-vm-inventory.log`. No host-mounted RW test, host installation,
+host agent refresh, security-policy change or push was performed.
 
