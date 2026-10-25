@@ -4,6 +4,8 @@ Yuzu NTFS **0.1 Beta** is an independent, GPL-2.0-only NTFS driver and menu-bar 
 
 ## Current platform spike
 
+**P0 provisionally closed; engine E2 selected** (TT NTFS Native). E1 is deferred under T6-R2. R1/R2/R3 remain provisional: R3 is VM-indicative within target band, not formal hardware acceptance. GUI toggle, macOS 26, physical SSD medians + surprise removal, and Windows `chkdsk` are **PENDING-OWNER**; chkdsk may overturn selection. See the [engine decision, evidence table and open P1 limitations](docs/spikes/p0-engine-selection.md).
+
 The app shows “Yuzu NTFS 0.1 Beta” and Quit in a menu-bar extra. Its embedded FSKit module probes NTFS boot sectors, including 4Kn resources, using `NTFSProbe`, then loads volumes through the integrated TT NTFS engine. Read-write admission is restricted to explicitly allowlisted volume serials; all other volumes fail closed to read-only. **This remains an experimental platform spike, not a production-safe NTFS driver.** Do not attach valuable data.
 
 Mounted macOS 27 VM checks now pass read-only corpus verification, resident append/remount, nonaligned 1000003-byte copy/EOF/remount, VDL zero-tail preservation and ADS write refusal with sector-covering KOIO mappings. **P0 limitation (M-R1):** the read-only latch rejects new write mappings and metadata changes but cannot revoke kernel-retained mappings; data in already-mapped, already-allocated clusters may still change. Physical-SSD/macOS 26 acceptance and production safety are not established. See the [R3 runbook and evidence](docs/spikes/p0-r3-throughput.md#append-corruption-root-cause-2026-10-25). [R1 enablement](docs/spikes/p0-r1-enable.md) and [R2 automount findings](docs/spikes/p0-r2-automount.md) are historical evidence.
