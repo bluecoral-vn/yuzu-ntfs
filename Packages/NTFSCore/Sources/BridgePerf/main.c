@@ -14,7 +14,11 @@
 #include <time.h>
 #include <stdatomic.h>
 
-struct device { int fd; _Atomic unsigned long reads, writes, flushes; };
+struct device {
+    int fd;
+    _Atomic unsigned long reads, writes, flushes, read_bytes, write_bytes;
+    _Atomic unsigned long read_sector_calls, write_sector_calls, max_read, max_write;
+};
 static os_log_t log_handle;
 static char directory[] = "/tmp/yuzu-bridge-perf-XXXXXX";
 static char copy[512];
@@ -23,7 +27,17 @@ static double seconds(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, 
 static void require(int error, const char *op) { if (error) { fprintf(stderr, "%s: %s (%d)\n", op, strerror(error), error); exit(1); } }
 static int transfer(void *ctx, uint64_t off, void *buf, size_t len, int write) {
     struct device *d = ctx;
-    if (write) ++d->writes; else ++d->reads;
+    if (write) {
+        ++d->writes; d->write_bytes += len;
+        d->write_sector_calls += (off % 512 + len + 511) / 512;
+        unsigned long maximum = d->max_write;
+        while (maximum < len && !atomic_compare_exchange_weak(&d->max_write, &maximum, len)) {}
+    } else {
+        ++d->reads; d->read_bytes += len;
+        d->read_sector_calls += (off % 512 + len + 511) / 512;
+        unsigned long maximum = d->max_read;
+        while (maximum < len && !atomic_compare_exchange_weak(&d->max_read, &maximum, len)) {}
+    }
     size_t done = 0;
     while (done < len) {
         ssize_t n = write ? pwrite(d->fd, (char *)buf + done, len - done, off + done) : pread(d->fd, (char *)buf + done, len - done, off + done);
@@ -49,7 +63,10 @@ static int entry(void *ctx, const uint16_t *name, size_t n, const nb_attr *a, ui
     ++*(unsigned long *)ctx; return 0;
 }
 int main(int argc, char **argv) {
-    if (argc != 3 || (strcmp(argv[2], "write") && strcmp(argv[2], "readdir"))) { fprintf(stderr,"usage: BridgePerf fixture.img write|readdir\n"); return 2; }
+    if (argc != 3 || (strcmp(argv[2], "write") && strcmp(argv[2], "readdir") &&
+                     strcmp(argv[2], "mount-ro") && strcmp(argv[2], "mount-rw"))) {
+        fprintf(stderr,"usage: BridgePerf fixture.img write|readdir|mount-ro|mount-rw\n"); return 2;
+    }
     struct stat st; require(stat(argv[1], &st) ? errno : 0, "stat");
     if (!S_ISREG(st.st_mode)) return 2;
     if (!mkdtemp(directory)) return 1;
@@ -63,8 +80,19 @@ int main(int argc, char **argv) {
     log_handle = os_log_create("com.bluecoral.yuzuntfs.BridgePerf", "performance");
     puts("operation,seconds,calls,device_reads,device_writes,device_flushes,extents");
     struct measurement m = begin(&d); PROFILE_BEGIN("mount");
-    require(api->nb_mount(&dev, !strcmp(argv[2],"write"), &v),"mount");
+    require(api->nb_mount(&dev, !strcmp(argv[2],"write") || !strcmp(argv[2],"mount-rw"), &v),"mount");
     PROFILE_END("mount"); report("mount",&d,m,1,0);
+    if (!strncmp(argv[2], "mount-", 6)) {
+        printf("mount_bytes,read=%lu,write=%lu,reads=%lu,writes=%lu,flushes=%lu,max_read=%lu,max_write=%lu,sector_read_calls=%lu,sector_write_calls=%lu\n",
+               d.read_bytes,d.write_bytes,d.reads,d.writes,d.flushes,d.max_read,d.max_write,d.read_sector_calls,d.write_sector_calls);
+        m = begin(&d);
+        require(api->nb_unmount(v),"unmount");
+        report("unmount",&d,m,1,0);
+        printf("total_bytes,read=%lu,write=%lu,reads=%lu,writes=%lu,flushes=%lu,max_read=%lu,max_write=%lu,sector_read_calls=%lu,sector_write_calls=%lu\n",
+               d.read_bytes,d.write_bytes,d.reads,d.writes,d.flushes,d.max_read,d.max_write,d.read_sector_calls,d.write_sector_calls);
+        close(d.fd);
+        return 0;
+    }
     uint64_t root = api->nb_root_ref(v);
     if (!strcmp(argv[2],"readdir")) {
         unsigned long count = 0; m=begin(&d); PROFILE_BEGIN("readdir_attributes");

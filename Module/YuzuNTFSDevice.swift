@@ -49,6 +49,16 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
         guard length >= 0, offset <= geometry.bytes, UInt64(length) <= geometry.bytes - offset else { return EOVERFLOW }
         let sector = geometry.sector
         do {
+            // Before mount there is no FSKit metadata cache to key by sector.
+            // Preserve TT's aligned request size instead of issuing one IPC
+            // round trip for every 512-byte sector of a 4 KiB engine read.
+            if !active, length > 0, offset % UInt64(sector) == 0, length % sector == 0 {
+                let bytes = UnsafeMutableRawBufferPointer(start: buffer, count: length)
+                if write {
+                    return try resource.write(from: UnsafeRawBufferPointer(bytes), startingAt: Int64(offset), length: length) == length ? 0 : EIO
+                }
+                return try resource.read(into: bytes, startingAt: Int64(offset), length: length) == length ? 0 : EIO
+            }
             var done = 0
             while done < length {
                 let position = Int64(offset) + Int64(done)
@@ -68,7 +78,7 @@ final class YuzuNTFSDevice: YuzuNTFSDeviceAccess {
                 if write {
                     if !whole { scratch.advanced(by: within).copyMemory(from: buffer.advanced(by: done), byteCount: count) }
                     if metadataActive {
-                        try resource.metadataWrite(from: UnsafeRawBufferPointer(start: target, count: sector), startingAt: base, length: sector)
+                        try resource.delayedMetadataWrite(from: UnsafeRawBufferPointer(start: target, count: sector), startingAt: base, length: sector)
                         cached.insert(base)
                     } else {
                         guard try resource.write(from: UnsafeRawBufferPointer(start: target, count: sector), startingAt: base, length: sector) == sector else { return EIO }
