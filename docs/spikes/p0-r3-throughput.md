@@ -1024,3 +1024,72 @@ Before a persistence/deadline stop it captures bounded samples of all current
 U processes and YuzuNTFSModule plus fskitd/module logs before signaling.
 Regression coverage now includes 19 informational owned-U samples followed by
 a mandatory stop at 20 seconds, for owned arguments/workers/module/open paths.
+
+### V-R2 final fresh-clone result — data corruption, NO-GO
+
+Monitor fix commits: `c798972` (V-R1), `98b917e` (V-R2).
+Four recorded-state tests passed after the V-R2 test first reproduced the
+immediate-stop bug. Clone `yuzu-qc-run-ntfs-20261025-vr2` reused the same
+stapled `ad91731` build, without rebuilding or installing on the host.
+Guest OS/CPU/RAM/disk were unchanged: 27.0.1 / 26A434, 4 vCPU, 12 GiB,
+80 GB virtio disk. Exact installed identity/hash and enabled=true passed.
+
+The single actual acceptance run was
+`9ff07144-67e3-4a0e-ac3b-5b31ccd53f85`.
+RO basic/names/bigdir hashes, 100000-entry enumeration, unchanged images,
+empty allowlist and final no-attachment/no-U inventory all **passed**.
+Transient U states were logged informationally; there was no persistent-U
+or phase timeout. RW append no longer returned EINVAL, but its clean
+remount readback **failed** with `Resident append/remount mismatch`.
+
+Additional disposable instrumentation left the acceptance assertions
+unchanged and captured `ntfscat` output only on **fully detached** images:
+before the first RW mount, after append before remount, and after final
+unmount/detach. It rederived the owned image device at each reattachment.
+Each snapshot retained full file bytes, SHA-256, length and first/last
+512 logical bytes for resident.txt, nonresident.bin and any existing
+nonaligned.bin/ads.txt.
+
+| Detached resident.txt evidence | Bytes |
+|---|---|
+| Before append, size 37 | `0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a294867` |
+| Expected after append, size 46 | Original 37 bytes followed by ASCII `P0-append` |
+| Actual after append and final detach, size 46 | ASCII `P0-append` at **offset 0**, followed by **37 zero bytes** |
+
+Thus the detached oracle proves destruction of the pre-existing bytes
+adjacent to the append range, not merely a mounted-cache mismatch.
+The unrelated nonresident.bin remained unchanged in all three snapshots
+(`e987c93a0a4837eaf02125d47e7ebf24dbe507cfc47a49c88e1f2f27492a9e8e`).
+This evidence does not expose physical sector slack beyond logical EOF:
+ntfscat emits only the stream's logical bytes.
+
+| Check/workload | V-R2 result |
+|---|---|
+| Resident append/remount/adjacent-byte preservation | **FAIL — confirmed detached data corruption** |
+| 1000003-byte cp/stat/cmp/EOF/remount + adjacent bytes | NOT REACHED |
+| Required copy blockmap/completeIO gate | NOT REACHED; append callback logs retained, not a copy pass |
+| VDL 37 + ftruncate 8192 + remount | NOT REACHED |
+| ADS write refusal | NOT REACHED |
+| Force-RO open FD / mmap / remount | NOT REACHED |
+| Yuzu 4 GiB seq read/write, copy 10k x 4 KiB, ls/rm 100k | 0 runs — withheld |
+| Same-guest Apple exFAT comparison | 0 runs — withheld |
+| Raw guest backing-file baseline | 0 runs — withheld |
+
+**R3 VM-provisional NO-GO.** No throughput numbers/ratios or physical-SSD
+claim; macOS 26 and physical SSD remain pending.
+
+Evidence: `build/qc-runs/20261025-vmrw-vr2/` includes complete acceptance,
+transient-U observations, installed identity/readiness, final process/image
+inventories, unified logs and module stack samples. `guest-artifacts.zip`
+preserves the **corrupted detached rw.img**, callback logs, source payload
+and all detached-oracle before/after files and JSON head/tail records.
+`oracle-summary.txt` records exact resident bytes. The guest DiagnosticReports
+directory was empty. Build/notary/staple/metadata evidence remains in
+`build/qc-runs/20261025-vmrw-rerun/`.
+
+Cleanup completed: RW failure's supervised clean unmount/detach succeeded,
+final guest hdiutil images was empty, allowlist was zero bytes and no force-RO
+hook remained. Guest shutdown returned expected tcpShutdown, guest runner
+and host launchctl service were removed, final clone was deleted and the
+payload share removed. Prior rerun clones were also deleted. Goldens and
+host installation were not modified; no push.
