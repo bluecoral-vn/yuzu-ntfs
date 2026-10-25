@@ -101,11 +101,15 @@ class Attachment:
         require(nodes == [self.dev], 'Image/device identity changed; refuse I/O')
 
     def attach(self):
+        self.mount.mkdir(parents=True, exist_ok=False)
+        self.reattach()
+
+    def reattach(self):
+        require(self.dev is None and not self.mounted, 'Reattach requires a detached owned image')
         info = plistlib.loads(self.runner.run('hdiutil', 'attach', '-nomount', '-plist', self.image).encode())
         nodes = [item['dev-entry'] for item in info['system-entities'] if item.get('dev-entry', '').startswith('/dev/disk')]
         require(len(nodes) == 1, 'Only partitionless owned fixture images are accepted')
         self.dev = nodes[0]
-        self.mount.mkdir(parents=True, exist_ok=False)
         self.remount()
 
     def remount(self):
@@ -214,31 +218,105 @@ def refused(action, description):
     else:
         raise RuntimeError(description + ': write succeeded; RO revocation is NOT established')
 
+def retained_writeback(action):
+    started = time.monotonic()
+    outcome = 'success'
+    try:
+        action()
+    except OSError as error:
+        if error.errno != errno.EROFS:
+            raise
+        outcome = 'EROFS'
+    require(time.monotonic() - started < 5, 'Retained mmap completeIO did not reply promptly')
+    print('M-R1 retained mmap writeback prompt ' + outcome + ' PASS', flush=True)
 
-def transition(attachment, mapped):
-    attachment.checked()
-    target = attachment.mount / ('transition-mmap.bin' if mapped else 'transition-fd.bin')
-    fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+
+def detached_inode(attachment, name, stage):
+    require(attachment.dev is None and not attachment.mounted, 'Inode oracle requires a detached image')
+    result = {}
+    for key, tool, args in (('metadata', 'ntfsinfo', ['-f', '-v', '-F', '/' + name, str(attachment.image)]),
+                            ('data', 'ntfscat', [str(attachment.image), '/' + name])):
+        command = [str(ROOT / 'tools/bin' / tool), *args]
+        captured = subprocess.run(command, capture_output=True, timeout=20)
+        require(captured.returncode == 0, 'Detached inode oracle failed: ' + captured.stderr.decode(errors='replace'))
+        result[key] = captured.stdout
+        suffix = '.txt' if key == 'metadata' else '.bin'
+        (attachment.image.parent / ('m-r1-' + stage + '-' + name + suffix)).write_bytes(captured.stdout)
+    return result
+
+
+def check_retained_mapping(before, after, offset, length):
+    require(before['metadata'] == after['metadata'], 'Post-latch MFT metadata/size/VDL/allocation changed')
+    require(len(before['data']) == len(after['data']), 'Post-latch file size changed')
+    end = offset + length
+    require(0 <= offset <= end <= len(before['data']), 'Invalid retained mapping range')
+    require(before['data'][:offset] == after['data'][:offset] and before['data'][end:] == after['data'][end:],
+            'Post-latch data changed outside previously mapped clusters')
+
+
+def mapped_transition(attachment):
+    target = attachment.mount / 'transition-mmap.bin'
+    unmapped = attachment.mount / 'transition-unmapped.bin'
+    for path, size in ((target, 8192), (unmapped, 262144)):
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        try:
+            os.write(fd, b'B' * 8192); os.ftruncate(fd, size); os.fsync(fd)
+        finally:
+            os.close(fd)
+    attachment.close()
+    before = {path.name: detached_inode(attachment, path.name, 'before') for path in (target, unmapped)}
+    attachment.reattach()
+    fd = os.open(target, os.O_RDWR)
+    new_fd = os.open(unmapped, os.O_RDWR)
     memory = None
     try:
+        memory = mmap.mmap(fd, 8192, access=mmap.ACCESS_WRITE)
+        require(memory[:] == before[target.name]['data'], 'Pre-latch cached mapping differs from detached bytes')
+        SUPPORT.mkdir(parents=True, exist_ok=True)
+        HOOK.touch(exist_ok=False)
+        os.statvfs(attachment.mount)
+        start = (attachment.image.parent / 'rw-callbacks.log').stat().st_size
+        def writeback():
+            memory[0:1] = b'X'; memory.flush(); os.fsync(fd)
+        retained_writeback(writeback)
+        def new_mapping():
+            os.pwrite(new_fd, b'N' * 512, 16384); os.fsync(new_fd)
+        refused(new_mapping, 'M-R1 NEW write blockmap')
+    finally:
+        if memory is not None:
+            memory.close()
+        os.close(new_fd); os.close(fd)
+        HOOK.unlink(missing_ok=True)
+    attachment.close()
+    after = {path.name: detached_inode(attachment, path.name, 'after') for path in (target, unmapped)}
+    check_retained_mapping(before[target.name], after[target.name], 0, 8192)
+    check_retained_mapping(before[unmapped.name], after[unmapped.name], 0, 0)
+    print('M-R1 detached MFT/EOF/VDL/runlist/allocation unchanged PASS', flush=True)
+    attachment.reattach()
+    require(target.read_bytes() == after[target.name]['data'] and unmapped.read_bytes() == after[unmapped.name]['data'],
+            'M-R1 remount differs from detached oracle')
+    print('M-R1 remount readback PASS', flush=True)
+    return start
+
+
+
+def transition(attachment, mapped):
+    if mapped:
+        return mapped_transition(attachment)
+    attachment.checked()
+    target = attachment.mount / 'transition-fd.bin'
+    fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+    try:
         os.write(fd, b'B' * 8192); os.fsync(fd)
-        if mapped:
-            memory = mmap.mmap(fd, 8192, access=mmap.ACCESS_WRITE)
+        # The retained-mmap case has a separate M-R1 detached metadata gate.
         SUPPORT.mkdir(parents=True, exist_ok=True)
         HOOK.touch(exist_ok=False)
         os.statvfs(attachment.mount)  # explicit next volume operation
-        if memory is None:
-            def write():
-                os.pwrite(fd, b'X', 0); os.fsync(fd)
-            refused(write, 'pre-latch FD')
-        else:
-            def writeback():
-                memory[0:1] = b'X'; memory.flush(); os.fsync(fd)
-            refused(writeback, 'pre-latch mmap writeback')
+        def write():
+            os.pwrite(fd, b'X', 0); os.fsync(fd)
+        refused(write, 'pre-latch FD')
     finally:
         HOOK.unlink(missing_ok=True)
-        if memory is not None:
-            memory.close()
         os.close(fd)
     # Removing the hook alone must not clear the latch; a fresh mount is needed.
     attachment.remount()
@@ -249,6 +327,7 @@ def rw_acceptance(runner, image, mount, evidence):
     source = evidence / 'source-1000003.bin'
     source.write_bytes(bytes((index * 17 + 3) & 255 for index in range(1_000_003)))
     log = evidence / 'rw-callbacks.log'
+    mmap_start = []
     def workload():
         try:
             attachment.attach()
@@ -289,13 +368,17 @@ def rw_acceptance(runner, image, mount, evidence):
             else:
                 os.close(stream); raise RuntimeError('ADS write-open succeeded')
             transition(attachment, False)
-            transition(attachment, True)
+            mmap_start.append(transition(attachment, True))
         finally:
             HOOK.unlink(missing_ok=True)
             attachment.close()
     log_phase(log, workload)
     text = log.read_text()
     require('blockmapFile' in text and 'completeIO' in text, 'Copy without observed KOIO blockmapFile/completeIO is NOT acceptance')
+    retained = log.read_bytes()[mmap_start[0]:].decode()
+    require('completeIO offset=0 length=8192 write=true' in retained, 'Missing post-latch retained mmap completion callback')
+    require('blockmapFile offset=16384 length=512 write=true' in retained, 'NEW write was refused without exercising a new blockmap')
+    print('M-R1 retained completion + NEW write blockmap callback evidence PASS', flush=True)
     print('Observed KOIO callback evidence:', log, flush=True)
 
 
@@ -329,7 +412,7 @@ def dry_plan(runner, args):
     print('PYTHON os.write(37 A bytes); fsync; ftruncate(8192); fsync; pread==37 A + zeros; remount/readback')
     print('PYTHON os.open(ads.txt:metadata, O_WRONLY) must fail EPERM/EROFS/EACCES promptly')
     print('PYTHON open FD before hook; touch ' + str(HOOK) + '; statvfs; pwrite/fsync must fail EROFS; remove hook + remount')
-    print('PYTHON mmap before hook; touch hook; statvfs; mmap write/flush/fsync must fail EROFS; remove hook + remount')
+    print('M-R1 mmap: detached pre/post ntfsinfo + ntfscat; retained-map writeback success/EROFS <5s; unchanged MFT/EOF/VDL/allocation/runlist; only mapped data may differ; NEW write blockmap EROFS; remount readback')
     runner.run('/sbin/umount', '<new-owned-mount>')
     runner.run('hdiutil', 'detach', '<fresh-derived-device>')
     print('ONLY AFTER EVERY ACCEPTANCE PASSES: supervised benchmark, own deadline and revoke-before-signal')

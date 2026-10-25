@@ -112,6 +112,13 @@ int nb_sync(nb_volume *v);
  *   inherited attributes). P0 FSKit rejects writes to those inhibited items.
  * - Write mappings/completion reject a currently read-only or shut-down core
  *   with EROFS, including an errors=remount-ro transition after mount.
+ *   M-R1 P0 limitation: this rejects NEW write mappings and metadata completion;
+ *   it cannot revoke a kernel-retained mapping. After the RO latch, the kernel
+ *   may still write data into already-allocated, already-mapped clusters.
+ *   Completion must reply promptly without changing MFT metadata, size, VDL or
+ *   allocation. An error reply does not establish that cached data was revoked.
+ *   P1: revoke retained data mappings via macOS 27 FSVolume.DataCacheHandler
+ *   setCacheState(push/invalidate), with mounted FD/mmap acceptance.
  * Callers serialize inode mutations and explicit write-lease decisions.
  * Reads overlapping an outstanding write use nb_read_map_during_write;
  * they never wait for another callback or acquire their own write lease.

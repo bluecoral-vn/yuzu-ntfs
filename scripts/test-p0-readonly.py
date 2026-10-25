@@ -64,6 +64,31 @@ class ReadOnlyAcceptance(unittest.TestCase):
         self.assertEqual(guest.ro_samples('bigdir', entries), [entries[i] for i in (0, 1, 49999, 99999)])
         self.assertEqual(guest.ro_samples('names', entries[:4]), entries[:4])
 
+    def test_retained_mapping_allows_only_already_mapped_data_changes(self):
+        before = {'metadata': b'MFT size=8192 VDL=8192 allocated=8192 runs=1',
+                  'data': b'B' * 8192}
+        after = {**before, 'data': b'X' + b'B' * 8191}
+        guest.check_retained_mapping(before, after, 0, 4096)
+        for invalid in ({**after, 'metadata': b'MFT VDL changed'},
+                        {**after, 'data': after['data'] + b'X'},
+                        {**after, 'data': b'B' * 8191 + b'X'}):
+            with self.assertRaises(RuntimeError):
+                guest.check_retained_mapping(before, invalid, 0, 4096)
+
+    def test_retained_mapping_writeback_accepts_prompt_success_or_erofs(self):
+        guest.retained_writeback(lambda: None)
+        def denied():
+            raise OSError(30, 'read-only')
+        guest.retained_writeback(denied)
+        with self.assertRaises(OSError):
+            guest.retained_writeback(lambda: (_ for _ in ()).throw(OSError(5, 'I/O error')))
+
+    def test_retained_mapping_writeback_rejects_slow_completion(self):
+        from unittest.mock import patch
+        with patch.object(guest.time, 'monotonic', side_effect=[1, 7]):
+            with self.assertRaisesRegex(RuntimeError, 'prompt'):
+                guest.retained_writeback(lambda: None)
+
 
 if __name__ == '__main__':
     unittest.main()

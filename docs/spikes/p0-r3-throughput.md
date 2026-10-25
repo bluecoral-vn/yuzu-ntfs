@@ -1423,3 +1423,68 @@ proven `yuzuntfs` row. Wrong device, filesystem, mountpoint or RO state still
 fails closed. The new recorded-output regression first reproduced both
 false refusals before the guard was changed.
 
+### Final headless verification and signed candidate
+
+Full plain, ASan and explicitly runtime-linked UBSan SwiftPM commands all
+exited **0**, each running **17 probe/policy + 44 actual-module glue +
+30 bridge tests**, including every fixture-entry ntfscat comparison.
+Bridge durations were **464.755 s**, **436.167 s** and **446.623 s**.
+`otool -L` confirms `@rpath/libclang_rt.ubsan_osx_dynamic.dylib`.
+No sanitizer diagnostics occurred; the existing SDK completion-status
+optionality warning and deliberate engine fault-injection messages remain.
+All seven Python suites exited 0: **38 tests** (benchmark 5, policy/ops 16,
+install 4, phases 1, readonly 6, seqio 2, VM monitor 4).
+Output: `headless-matrix.log`, `ubsan-linked-runtime.log`, `python.log`.
+
+An initial plain invocation's 300-second deadline was too short for the
+100000-entry detached oracle comparison; its surviving helper was sampled
+and terminated, not mistaken for a filesystem deadlock. A preliminary full
+run then exposed an incorrect test-only assumption that completion cache
+purge queries must also be rounded. That expectation was restored: the
+new contract concerns **packed kernel mappings**, not non-I/O purge queries.
+The final three complete runs above use the corrected tests.
+
+Source candidate **`61e93f1507c737fbaff9020e251988a794bbeaa3`** was built
+Release-Direct, Developer ID signed, notarized submission
+**`38f6d552-267b-4f95-b990-f6b4c96e5c46` Accepted**, stapled and
+strict-codesign/Gatekeeper verified. Both embedded commits match;
+KOIO=true and AppIcon metadata match. Module executable SHA-256:
+`ee6da00c102129d896452e850edc03f2fc8bba2847dbf8fbaafedb10d8832c65`.
+The final artifact is `YuzuNTFS-61e93f1-stapled.zip`.
+
+### Controller ruling M-R1 — retained mappings after the RO latch
+
+The first full final-candidate VM run passed RO basic/names/bigdir (including
+100000 names and unchanged images), resident append/remount, the 1000003-byte
+cp/stat/cmp/EOF/remount workload with real KOIO callbacks, VDL 37 followed by
+ftruncate(8192)/remount, ADS refusal, and pre-latch-FD EROFS. Its original
+strict mmap-revocation assertion stopped: msync/fsync succeeded through a
+retained mapping. That original failure is retained in
+`final-guest-artifacts.zip` and `final-acceptance-observed.log`; no benchmark
+was allowed past that then-failing gate.
+
+**M-R1 changes the P0 acceptance contract**, not the extension binary:
+after the RO latch the kernel may write data within already-allocated,
+already-mapped clusters. Returning EROFS from completeIO does not revoke
+those device mappings. P0 must still reply promptly, leave target MFT
+metadata/EOF/VDL/allocation/runlist unchanged, and return EROFS for every
+**NEW** write blockmap. This is a documented P0 limitation, not a claim of
+complete cached-write revocation.
+
+The replacement gate captures verbose detached ntfsinfo and ntfscat
+snapshots before mapping and after the post-latch operation. It compares
+the entire target inode metadata dump, exact file lengths and all bytes
+outside the previously mapped range. A second pre-opened file has an
+unmapped range at 16384: a post-latch 512-byte write must exercise a NEW
+blockmap and receive EROFS, with its detached metadata and bytes unchanged.
+The retained mmap msync/fsync must return success or EROFS in under five
+seconds; callback evidence must include its completion and the denied NEW
+write mapping. Fresh remount bytes must agree with the detached oracle.
+
+**P1 item:** revoke retained mappings using macOS 27
+`FSVolume.DataCacheHandler.setCacheState(push/invalidate)`, with real
+pre-latch FD and mmap tests. This is not implemented by the P0 gate change.
+The same limitation is recorded in `ntfs_bridge.h`.
+All seven Python suites pass after three new M-R1 regressions first failed
+on the missing gate functions: **41 tests** total (`python-m-r1.log`).
+
