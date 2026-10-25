@@ -7,9 +7,10 @@
 sector-covering KOIO fix passes resident append/remount, nonaligned
 1000003-byte copy/EOF/remount, VDL zero tails, ADS refusal and the documented
 retained-mapping RO boundary. Physical-SSD and macOS 26 acceptance remain
-pending. **Performance is NO-GO:** the partial V-R4 benchmark and its
-separate V-R3 mount-time rule are
-reported in [Append corruption root cause (2026-10-25)](#append-corruption-root-cause-2026-10-25).
+pending. **Performance is NO-GO:** latest candidate `2efc262` passes the full
+functional gate, but its 8 GiB benchmark mount took 31.957 s and V-R4 stopped
+an owned disk-image helper before any transfer row. See
+[Performance pass (2026-10-25)](#performance-pass-2026-10-25).
 The pre-reboot kernel wedge and the failed intermediate candidates below
 are historical evidence, not the current mounted-functional verdict.
 
@@ -1631,4 +1632,204 @@ Lume inventory contains only the three stopped golden VMs. The host
 artifact HTTP service was stopped. See `cleanup-summary.txt` and
 `final-host-vm-inventory.log`. No host-mounted RW test, host installation,
 host agent refresh, security-policy change or push was performed.
+
+## Performance pass (2026-10-25)
+
+### Headless profiling and bounded changes
+
+Source before this pass: `40e6b73` (functional transport `61e93f1`).
+Performance implementation: `8f9e549` + dirty-checkpoint repair `2efc262`. Evidence:
+`build/qc-runs/20261025-performance/`.
+`BridgePerf` clones regular fixture images and exercises the real E2 bridge,
+with `os_signpost` intervals and per-phase device read/write/flush counters.
+The before measurements were captured before changing engine behavior.
+Two additional headless `xctrace` Time Profiler recordings and exported call
+stacks are retained as `headless-{write,readdir}.trace`,
+`xctrace-*-samples.xml`, and `profile-sample-summary.json`.
+These are POSIX image-callback microbenchmarks, not mounted FSKit rates.
+
+The original 64 write mappings produced 64 single-extent replies and 64
+unconditional device flushes; 64 completions produced another 192 flushes
+and 448 metadata writes. Completion accounted for 27.466 of the 32.045 ms
+sequential workload. It synchronously checkpointed both the inode and
+the entire volume. A separate real Swift metadata-purge microbenchmark
+found that every small map/completion scanned the volume's whole growing
+cached-sector set: 1000 eight-sector queries against 10000 cached sectors
+took 618.033 ms. Readdir's measured CPU stacks were dominated by cold inode/
+MFT reads (109 inclusive `ntfs_inode_get` samples; 67 leaf `pread` samples),
+not UTF conversion. Mount explicitly joined the background bitmap worker.
+
+| Headless workload/cost | Before | After | Interpretation |
+|---|---:|---:|---|
+| 64 MiB, 64 × 1 MiB write + final sync | 32.045 ms | 12.824 ms | 2.50× shorter; not a VM throughput claim |
+| 64 blockmap calls | 0.572 ms / 64 flushes | 0.095 ms / 0 flushes | One extent per reply in both runs |
+| 64 completeIO calls | 27.466 ms / 192 flushes / 448 metadata writes | 8.784 ms / 64 flushes / 0 metadata writes | Payload durability flush retained; metadata checkpoint deferred |
+| 256 × create / 4 KiB map-write-complete / hold-release + final sync | 73.789 ms / 1025 flushes | 25.718 ms / 257 flushes | Tiny files retain exact allocation |
+| 100000-entry bridge readdir with attributes | 314.372 ms | 309.478 ms | Essentially unchanged cold-MFT cost; no material speedup claim |
+| Swift purge intersection, 1000 queries / 10000 cached sectors | 618.033 ms | 0.931 ms | Adaptive smaller-set intersection; ≈664× in this isolated case |
+| Mount + statfs with an injected 300 ms bitmap delay | 312.215 ms | <250 ms | Regression bound; conservative free-space estimate until known |
+
+Streaming growth at/above 1 MiB reserves to the next 8 MiB boundary,
+including streams split into small kernel upcalls; speculative ENOSPC
+falls back to exact allocation. EOF/VDL and the submitted payload remain
+untouched until successful completion. Ordinary maps drain dirty buffered
+data without unconditional inode/device fsync; resident promotion keeps
+its explicit sync. Completion still flushes payload/gap/partial-sector tail
+before VDL publication, but inode/volume checkpointing is now D13's
+serialized five-second timer plus explicit fsync/synchronize/eject.
+The timer is cancelled on teardown and a checkpoint error latches RO.
+
+Mount and statfs no longer join bitmap initialization. Statfs conservatively
+reports zero free clusters until known. Every user allocation/freeing entry
+checks readiness before entering TT's unbounded waits: a finite
+1000 × 1 ms grace returns EAGAIN without mutation if the producer is still
+pending. An early producer failure still fails mount with its original errno;
+a late failure remains terminal through statfs/mutation, sets RO/known and
+wakes waiters. The actual failed-readahead ENOMEM regression is retained.
+
+Readdir now resolves each child once for both public attributes and private
+routing flags; Swift snapshots effective writability once per serialized
+batch rather than querying statfs/the fault-hook path per entry. Metadata
+purge probes whichever is smaller, cached sectors or the mapped sector span,
+and deduplicates physical overlaps; flush-before-purge and both completion
+purges remain. T5-R1..R3, T7 restrictions, F-R1/R2, Q-R1, R-R1 and M-R1 are
+unchanged. In particular, exact sector-covering kernel mappings from
+`61e93f1`, zero-before-VDL ordering and retained-map RO limitations remain.
+
+Headless regressions cover speculative allocation/unchanged EOF, short
+streaming upcalls, one payload flush per completion, deferred-sync remount
+readback, nonblocking mount/statfs, terminal initialization errors, purge
+partial-block edges/holes/deduplication/huge extents and timer teardown.
+The new checkpoint path additionally required re-arming the volume dirty
+marker after a clean checkpoint: a retained write may complete without
+another blockmap. Its regression first reproduced a wrongly clean detached
+volume after discard-without-sync; `2efc262` writes the marker record before
+metadata mutation and includes it in the retained payload durability flush.
+Both with-remap and retained-map cases now leave the actual dirty flag set.
+The benchmark completes all five sequential samples before metadata rows,
+so a later V-R4 stop cannot erase the sequential median; rows are still
+fsync-persisted immediately. The Apple NTFS baseline explicitly calls
+`mount_ntfs -o rdonly`, not FSKit-forced `mount -F`.
+
+### Final headless matrix and release identity
+
+At `2efc26249cc52582a670adf65125eae9bb637a1f`, the full plain, ASan and
+explicitly runtime-linked UBSan commands each passed **17 probe/policy +
+47 actual-module glue + 35 bridge tests**. Bridge durations were
+**399.548 s / 415.133 s / 349.832 s**. `otool -L` confirms
+`@rpath/libclang_rt.ubsan_osx_dynamic.dylib` on the actual bridge test
+executable. No sanitizer findings occurred. All seven Python suites passed
+**48 tests** (9 benchmark, 4 install, 1 phases, 10 RO/retained-map,
+6 VM-monitor, 16 ops/policy, 2 seqio). Existing pristine-TT compiler warnings
+and the SDK completion-status optionality warning remain; deliberate
+fault/discard tests emit expected engine errors. Complete logs:
+`matrix-final-plain-asan-ubsan.log`, `ubsan-linked-runtime.log`,
+`matrix-python-final.log`. Earlier interrupted/superseded matrices are
+not counted as the final gate.
+
+Release-Direct built and Developer ID signed successfully using the ASC API
+key for Xcode provisioning access. Notarization
+**`fdb669cc-89e7-4a47-afdd-587a2b729de3` Accepted**; staple, strict codesign,
+Gatekeeper and ZIP integrity checks passed. Both embedded commits are
+`2efc26249cc52582a670adf65125eae9bb637a1f`, KOIO=true.
+Module executable SHA-256:
+`ebd03303ada317a63d585c9f44584e45a28e4c1a76ca5b0260340754428c5422`.
+Stapled archive `YuzuNTFS-2efc262-stapled.zip` SHA-256:
+`84d4f4a35c6a08d594d4fc5f9c8177e99c9f0047a95cd40637ed1a55648a4fca`.
+The host's generated app/module registration was removed and its unpacked
+products archived/deleted; the unchanged installed host module remained
+the sole registration. There was no host install or agent refresh.
+
+The only owned clone is `yuzu-qc-run-ntfs-perf-20261025`, freshly cloned
+from `yuzu-qc-27-dev` (27.0.1 / 26A434, 4 vCPU, 12 GiB, 80 GB virtio).
+Its VM helper was identified by open files under that exact clone directory
+before applying background task policy. Another session's VM was never
+controlled. The read-only transfer share was unmounted before guest install.
+Guest installation checked both identities/hash, signature/Gatekeeper and
+enabled=true at the exact installed URL; installed UUID:
+`FC1E3334-AC15-4FE1-B388-EF7E464C513C`. Rollback disable/enable and readiness
+checks passed before acceptance. One initial installer attempt stopped
+safely at LS unregister -10814 because only the staged plugin, not its
+parent app, had been registered; registering that parent app and plugin
+completed the missing prerequisite, then the unchanged installer succeeded.
+No filesystem acceptance workload preceded that correction.
+
+The first guest monitor launch was also a setup failure, not an acceptance
+attempt: legacy `launchctl submit` retained the user execution context even
+when invoked through sudo, so the monitor rejected its non-root effective
+UID before creating `acceptance.log` or attaching any image. Its host
+observer reached its deadline. That failed launch service was removed;
+the corrected user-domain launch runs sudo inside the submitted command.
+The actual Python monitor's UID=0 was explicitly observed before starting
+the result observer. V-R1..V-R4 and all workload deadlines are unchanged.
+
+That root monitor then exposed a second packaging prerequisite before any
+acceptance phase: Python's `sys.executable` referenced the Homebrew opt
+launcher absent from the copied framework. The worker exited 127 without
+attaching media. Adding the guest-only launcher symlink to the already
+copied runtime resolved it; the failed launch logs/status were preserved
+separately before the real workload was started.
+
+### Mounted functional result, target table and stop
+
+**Full macOS 27 VM functional acceptance: PASS at `2efc262`.**
+The actual unchanged workload completed RO basic/names/bigdir manifest/hash
+and 100000-entry checks with unchanged RO images; RW resident append/remount;
+the exact 1000003-byte cp/stat/cmp/EOF/remount path; VDL 37 + truncate 8192
+zero tails/remount; ADS refusal; pre-latch FD EROFS; and all M-R1 retained-map
+callback, prompt reply, detached MFT/EOF/VDL/allocation/runlist/confinement
+and remount checks. Actual `blockmapFile` and `completeIO` evidence was
+required and observed. Acceptance evidence directory:
+`build/p0-guest/ed0d407a-28cb-4ef6-9f06-cb7e78b8de77/`, captured in
+`yuzu-functional-final-guest-evidence.zip`.
+
+Only after that gate did the benchmark start. Its durable initial mount
+row is **31.957127 s**. V-R4 recorded owned `diskimages-helper` PID 5443
+continuously U for **20.1 s** and stopped the benchmark. This is not an
+extension process, so the V-R3 extension-only 120-second mount exception
+does not apply. The limit was not weakened. No transfer row completed and
+no five-run VM median exists for this candidate. Bounded stack/log capture
+commands themselves hit their evidence deadlines; they do not establish a
+new deadlock cause. The mount regression remains unresolved despite
+nonblocking bridge initialization and improved headless callback costs.
+
+| Spec §6 workload | Historical `61e93f1` VM result | `2efc262` VM result | Target / verdict |
+|---|---:|---:|---|
+| Sequential read, 4 GiB | 1373.479 MiB/s, one run | NOT REACHED | ≥100% Apple NTFS; **NOT VERIFIED** |
+| Sequential write, 4 GiB | 168.142 MiB/s, one run | NOT REACHED | ≥90% exFAT; **NOT VERIFIED** |
+| Copy 10000 × 4 KiB | Owned-U safety stop, no completed time | NOT REACHED | ≤1.5× exFAT; **NOT VERIFIED** |
+| ls -l 100000 | NOT REACHED | NOT REACHED | ≤1.2× exFAT; **NOT VERIFIED** |
+| rm -rf 100000 | NOT REACHED | NOT REACHED | ≤1.5× exFAT; **NOT VERIFIED** |
+| 8 GiB mount | 0.8–24.9 s; historical exFAT ≤2.3 s | 31.957127 s | **NO-GO**; startup cost unresolved |
+| Same-guest raw / native NTFS / exFAT comparison | Prior partial comparisons only | NOT RUN | No replacement denominator or invented ratio |
+
+After the safety stop, the owner's wrap-up instruction ended further VM
+workloads and optimization iterations. The raw/native/exFAT baselines and
+remaining five-run rows were therefore not started. This pass delivers
+profiled code changes and the passing functional/sanitizer gate, **not a
+performance acceptance pass**. Physical SSD and macOS 26 remain untested.
+
+### Cleanup and retained evidence
+
+The owned benchmark serial was explicitly revoked and the force-RO hook
+removed before cleanup. The latest process inventory had no state-U
+survivor and no mounted owned filesystem, but the remaining image
+attachment's normal `hdiutil detach` returned **Resource busy**. No forced
+unmount or filesystem-daemon kill was attempted. Only the disposable guest
+was shut down (expected NIOSSH tcpShutdown); its host launch service was
+removed and the exact owned clone deleted successfully. Guest monitor
+state disappeared with that clone. The read-only payload and this pass's
+DerivedData were removed; only the three stopped goldens remain in the
+final Lume inventory. Other sessions' VMs and all goldens were untouched.
+The host installation/agent were not changed and no push occurred.
+
+Retained evidence includes final headless matrices, Time Profiler traces,
+before/after microbenchmarks, signed/notarized archive and identity,
+full functional callback/oracle logs, durable benchmark mount row,
+V-R4 stop and bounded capture outcomes, failed setup attempts, cleanup
+failure disclosure, shutdown/delete/service-removal and final inventory.
+Key files: `yuzu-functional-final-guest-evidence.zip`,
+`guest-final-precleanup-inventory.log`, `guest-final-cleanup.log`,
+`guest-shutdown.log`, `owned-clone-delete.log`,
+`host-vm-service-remove.log`, `final-host-vm-inventory.log`.
 
