@@ -2093,3 +2093,46 @@ variation is not attributed to an exact-allocation speedup. These are not
 mounted throughput, physical-device or exFAT/native-reference claims.
 Streaming reservation is no longer part of the P0 candidate.
 
+### Full matrix and initial mounted proof
+
+At immutable app/engine source `92e056c10d5768ea72c5463460f58463e5da6aaa`,
+plain, ASan and explicitly linked UBSan each passed **17 probe + 50 glue +
+36 bridge = 103 tests**. Bridge durations: **816.800 / 835.105 / 749.248 s**.
+The exercised bridge executable links `@rpath/libclang_rt.ubsan_osx_dynamic.dylib`.
+Debug and Release-Direct builds passed. Existing SDK/pristine-upstream
+warnings and expected fault-injection diagnostics remain; no sanitizer
+finding occurred.
+
+Developer ID signature, notarization **042cf500-708d-4eec-ad3d-548b0912a34d
+Accepted**, staple/validation, strict signature, Gatekeeper and ZIP integrity
+all passed. `YuzuNTFS-92e056c-stapled.zip` module SHA-256:
+`7430be2dad37ef07f06670dff2ed1df6e9242181c0ae8df1db07822985cb725b`.
+
+Fresh guest installation exercised both actual absence cases without
+manual staged registration: PlugInKit reported no matches and LaunchServices
+reported the exact scoped -10814; archive/isolation and initial readiness
+passed. A subsequent parent-app rescan emitted pluginsunregistered and
+removed the newly published module. The first RO mount consequently failed
+with “Unable to invoke task”, before any module callback or RW operation;
+normal detach succeeded. This failed setup is retained, not counted as
+functional acceptance.
+
+Scoped installed-only `lsregister -f -R -trusted` registration followed by
+ordinary no-active-volume enablement restored stable discovery. This is the
+same registration recipe Xcode emits; -R explicitly descends into packages.
+The installer now emits that recipe for the verified installed app, before
+PlugInKit registration. An outbound-protocol regression failed on the old
+flat command and passed after the correction. All seven Python suites again
+passed **54 tests**. No retries, delay loop, registry reset, staged
+preregistration or daemon kill was added.
+
+The corrected run in the same disposable clone then passed the **full
+unchanged functional gate including M-R1** and the additional 1 MiB
+write/fsync/close + detach/RO-remount proof. Acceptance UUID:
+`b94b3382-4c74-4cd4-b0e5-6eb76a6822a9`.
+Observed free bytes **258179072 → 257130496**, exactly **1048576 bytes**
+consumed; file EOF and allocated bytes both **1048576**. Remounted allocation
+and payload matched. All attachments were normally detached and the RW
+allowlist was empty. No benchmark was requested in this delta wave; the
+earlier performance NO-GO is unchanged.
+

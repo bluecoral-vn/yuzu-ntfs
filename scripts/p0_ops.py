@@ -379,7 +379,7 @@ def install(runner, staged, expected_commit):
     if not runner.dry:
         require(all(record['path'] == str(APPEX) for record in registrations(isolated)), 'Noninstalled registration survived isolation; stop before final registration/refresh')
     print('ASSERT no unpacked known duplicate/staged bundle remains; no noninstalled registration')
-    runner.run(LSREGISTER, '-f', APP)
+    runner.run(LSREGISTER, '-f', '-R', '-trusted', APP)
     runner.run('pluginkit', '-a', APPEX)
     runner.run('pluginkit', '-e', 'use', '-i', MODULE)
     final = runner.run('pluginkit', '-mADvvv', '-i', MODULE)

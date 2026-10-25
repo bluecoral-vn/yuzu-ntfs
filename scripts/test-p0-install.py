@@ -81,6 +81,9 @@ class InstallerIsolation(unittest.TestCase):
                 ops.install(runner, staged, COMMIT)
             self.assertFalse(staged.exists())
             self.assertTrue(installed.exists())
+            # The externally emitted LS protocol must discover nested modules,
+            # matching Xcode's own registration, before PlugInKit admission.
+            self.assertIn([str(ops.LSREGISTER), '-f', '-R', '-trusted', str(installed)], runner.commands)
 
     def test_fresh_guest_absent_plugin_is_isolated_without_unregister(self):
         self.fresh_absence(plugin=True)
