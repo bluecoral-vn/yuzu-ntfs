@@ -14,7 +14,7 @@
 
 ## Global Constraints
 - Licence GPL-2.0-only for the whole repo (D2); upstream sources kept pristine under `upstream/`.
-- macOS 26.0 deployment target, arm64 only (D5). macOS 27 APIs only behind `#available(macOS 27, *)`.
+- macOS 26.0 deployment target, universal arm64 + x86_64 (D5 amended 2026-10-26 at owner request; original spike targeted arm64 only). macOS 27 APIs only behind `#available(macOS 27, *)`.
 - Bundle ids `com.bluecoral.vn.yuzuntfs` / `com.bluecoral.vn.yuzuntfs.fsmodule`; `FSShortName` `yuzuntfs` (D7). Team `37PX6W22C5`; never touch Yuzu Drag's identity.
 - `MARKETING_VERSION 0.1.0`, `CURRENT_PROJECT_VERSION 1` (D1).
 - Spike results are written to `docs/spikes/p0-*.md` with OS build, hardware, commands and raw numbers; claims without measurements do not count.

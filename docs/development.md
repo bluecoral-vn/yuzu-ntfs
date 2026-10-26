@@ -1,6 +1,6 @@
 # Yuzu NTFS — Development
 
-Yuzu NTFS **0.1 Beta** is an independent, GPL-2.0-only NTFS driver and menu-bar app for **macOS 26.0+ on Apple Silicon (arm64)**. The entire repository is licensed under GNU GPL version 2 only; see [LICENSE](../LICENSE). It has no shared code dependency on Yuzu Drag.
+Yuzu NTFS **0.1 Beta** is an independent, GPL-2.0-only NTFS driver and menu-bar app for **macOS 26.0+**, shipped as a **universal binary (Apple silicon arm64 + Intel x86_64)**. Intel Macs top out at macOS 26; the macOS 27 SDK warns that x86_64 is deprecated for a 27.0 deployment target. The x86_64 slices are compiled and structurally verified, but have not yet been runtime-tested on Intel hardware. The entire repository is licensed under GNU GPL version 2 only; see [LICENSE](../LICENSE). It has no shared code dependency on Yuzu Drag.
 
 ## Current platform spike
 
@@ -34,7 +34,7 @@ For updater acceptance, `--qa-update-feed http://192.168.64.1:8787/appcast-local
 
 ## Build
 
-Requirements: Xcode 27.1 (tested host toolchain), XcodeGen, an arm64 Mac; Python 3 for the ntfsprogs source-integrity check and fixture acceptance checker. `project.yml` is the source of truth; the generated Xcode project is not committed.
+Requirements: any Mac capable of running Xcode 27.1 (tested host toolchain), XcodeGen; Python 3 for the ntfsprogs source-integrity check and fixture acceptance checker. On Apple silicon, Rosetta is needed only to run x86_64 tests, not to cross-compile or structurally verify x86_64 binaries. `project.yml` is the source of truth; the generated Xcode project is not committed.
 
 ```sh
 xcodegen generate

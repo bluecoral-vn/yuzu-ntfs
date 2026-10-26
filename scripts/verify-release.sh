@@ -2,6 +2,28 @@
 set -euo pipefail
 APP="$1"
 PLIST="$APP/Contents/Info.plist"
+# Check architecture before signatures so a thinned or incomplete bundle fails
+# with the offending binary, even when modifying it also invalidated signing.
+python3 - "$APP" <<'PY'
+import pathlib, subprocess, sys
+app = pathlib.Path(sys.argv[1])
+if not app.is_dir():
+    sys.exit(f'App bundle not found: {app}')
+mach_o_count = 0
+for binary in sorted(app.rglob('*')):
+    if binary.is_symlink() or not binary.is_file():
+        continue
+    kind = subprocess.check_output(['/usr/bin/file', '-b', str(binary)], text=True)
+    if 'Mach-O' not in kind:
+        continue
+    mach_o_count += 1
+    result = subprocess.run(['/usr/bin/lipo', '-archs', str(binary)], text=True, capture_output=True)
+    if result.returncode or not {'arm64', 'x86_64'}.issubset(result.stdout.split()):
+        sys.exit(f'Universal architecture check failed: {binary} (architectures: {result.stdout.strip() or result.stderr.strip() or "unknown"}; required: arm64 x86_64)')
+if not mach_o_count:
+    sys.exit(f'Universal architecture check failed: no Mach-O binaries in {app}')
+print(f'Universal architecture check passed: {mach_o_count} Mach-O binaries contain arm64 and x86_64')
+PY
 codesign --verify --strict --verbose=2 "$APP"
 test -d "$APP/Contents/Frameworks/Sparkle.framework"
 if find "$APP/Contents/Extensions" -name Sparkle.framework | /usr/bin/grep -q .; then echo 'Sparkle embedded in FSKit extension' >&2; exit 1; fi
