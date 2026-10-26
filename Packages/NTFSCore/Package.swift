@@ -13,7 +13,7 @@ let package = Package(
         .library(name: "EngineE2", targets: ["EngineE2"])
     ],
     targets: [
-        .target(name: "NTFSProbe"),
+        .target(name: "NTFSProbe", linkerSettings: [.linkedFramework("DiskArbitration")]),
         .testTarget(name: "NTFSProbeTests", dependencies: ["NTFSProbe"]),
         .target(name: "NTFSBridge"),
         .target(name: "EngineE2", dependencies: ["NTFSBridge"], exclude: ["PATCHES.md"], cSettings: [

@@ -33,8 +33,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     var forceReadOnlyURL = (BetaPolicy.directory ?? FileManager.default.temporaryDirectory)
         .appendingPathComponent("force-read-only")
     private var sharedStatus: VolumeStatus?
+    private let statusDirectory: URL?
     private func publishStatus() {
-        guard let directory = BetaPolicy.directory, let sharedStatus else { return }
+        sharedStatus?.updatedAt = Date()
+        guard let directory = statusDirectory, let sharedStatus else { return }
         do { try sharedStatus.write(at: directory) }
         catch { Self.p0Log.error("Cannot publish volume status: \(error.localizedDescription)") }
     }
@@ -81,16 +83,21 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             reason = .forCleanDevice(writable: device.isWritable, acknowledged: acknowledged,
                                      allowed: allowed, requestedReadOnly: readOnly)
         }
-        self.init(device: adapter, boot: boot, writable: writable, api: api)
-        sharedStatus = VolumeStatus(serial: boot.serial, device: device.bsdName, writable: writable, reason: reason)
-        publishStatus()
+        let status = DiskIdentity.read(device: device.bsdName).map {
+            VolumeStatus(serial: boot.serial, identity: $0, writable: writable, reason: reason)
+        }
+        self.init(device: adapter, boot: boot, writable: writable, api: api, status: status, statusDirectory: directory)
     }
-    init(device: any YuzuNTFSDeviceAccess, boot: NTFSBootSector, writable: Bool, api: nb_engine) {
+    init(device: any YuzuNTFSDeviceAccess, boot: NTFSBootSector, writable: Bool, api: nb_engine,
+         status: VolumeStatus? = nil, statusDirectory: URL? = nil) {
         self.device = device
         self.boot = boot
         self.writable = writable
         self.api = api
+        sharedStatus = status
+        self.statusDirectory = statusDirectory
         super.init(volumeID: FSVolume.Identifier(uuid: boot.volumeUUID), volumeName: FSFileName(string: "Yuzu-NTFS"))
+        publishStatus()
     }
     deinit { checkpointTimer?.cancel(); if let core { _ = api.nb_dispose!(core) } }
     private func discardCore() {
@@ -101,6 +108,14 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         device.metadataActive = false
     }
     private func check(_ code: Int32) throws { if code != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(code)) } }
+    func withdrawStatus() {
+        serial {
+            defer { sharedStatus = nil }
+            guard let statusDirectory, let sharedStatus else { return }
+            do { try sharedStatus.remove(at: statusDirectory) }
+            catch { Self.p0Log.error("Cannot remove volume status: \(error.localizedDescription)") }
+        }
+    }
     private func serial<T>(_ body: () throws -> T) rethrows -> T {
         try items.withLock {
             if core != nil && FileManager.default.fileExists(atPath: forceReadOnlyURL.path) { terminalReadOnly = true }

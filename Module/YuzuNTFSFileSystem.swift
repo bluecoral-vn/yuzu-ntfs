@@ -6,7 +6,7 @@ import NTFSProbe
 final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
     private let resourceLock = NSLock()
     private var lastResource: FSBlockDeviceResource?
-    private weak var lastVolume: YuzuNTFSVolume?
+    private var lastVolume: YuzuNTFSVolume?
 
     private struct CheckContext: @unchecked Sendable {
         let resource: FSBlockDeviceResource?
@@ -43,9 +43,6 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
                                          startingAt: 0, length: count)
             guard actual >= 0, actual <= count else { throw POSIXError(.EIO) }
             if NTFSBootSector.isBitLocker(UnsafeRawBufferPointer(start: buffer, count: actual)) {
-                if let directory = BetaPolicy.directory {
-                    try? VolumeStatus(serial: 0, device: device.bsdName, writable: false, reason: .bitlocker).write(at: directory)
-                }
                 replyHandler(.notRecognized, nil)
                 return
             }
@@ -79,7 +76,11 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
 
     func unloadResource(resource: FSResource, options: FSTaskOptions,
                         replyHandler: @escaping ((any Error)?) -> Void) {
-        resourceLock.withLock { lastResource = nil; lastVolume = nil }
+        let volume = resourceLock.withLock {
+            defer { lastResource = nil; lastVolume = nil }
+            return lastVolume
+        }
+        volume?.withdrawStatus()
         containerStatus = .notReady(status: POSIXError(.ENOTCONN))
         replyHandler(nil)
     }

@@ -81,7 +81,9 @@ public struct NTFSBootSector: Sendable {
                                   indexRecordSize: recordSize(68), serial: littleEndian(72, 8))
     }
 
-    public var volumeUUID: UUID {
+    public var volumeUUID: UUID { Self.volumeUUID(serial: serial) }
+
+    public static func volumeUUID(serial: UInt64) -> UUID {
         // RFC 9562 UUIDv5: fixed project namespace 92F6726A-7F30-579F-9B24-DACE3D692866
         // followed by the NTFS 64-bit serial in little-endian order (no text encoding).
         var input: [UInt8] = [0x92, 0xf6, 0x72, 0x6a, 0x7f, 0x30, 0x57, 0x9f,

@@ -73,8 +73,15 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
         self.session = session
         DASessionSetDispatchQueue(session, .main)
     }
-    func perform(device: String, action: String, allowWriting: Bool = false) async throws {
-        let request = try RemountRequest(device: device, allowWriting: allowWriting)
+    func identity(device: String) -> DiskIdentity? { DiskIdentity.read(device: device, session: session) }
+    private func requireIdentity(_ expected: DiskIdentity, remount: Bool, allowWriting: Bool) throws {
+        guard let current = identity(device: expected.device), current.sameAttachment(as: expected) else { throw POSIXError(.ENODEV) }
+        if remount && !current.isNTFS { throw POSIXError(.EINVAL) }
+        if allowWriting && !current.deviceWritable { throw POSIXError(.EROFS) }
+    }
+    func perform(identity: DiskIdentity, action: String, allowWriting: Bool = false) async throws {
+        try requireIdentity(identity, remount: action == "remount", allowWriting: allowWriting)
+        let request = try RemountRequest(device: identity.device, allowWriting: allowWriting)
         guard let disk = DADiskCreateFromBSDName(kCFAllocatorDefault, session, request.devicePath) else { throw POSIXError(.ENODEV) }
         if action == "remount" || action == "eject" {
             try await withCheckedThrowingContinuation { continuation in
@@ -82,6 +89,8 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
                 DADiskUnmount(disk, DADiskUnmountOptions(kDADiskUnmountOptionDefault), diskReply, context)
             }
         }
+        // Re-check after the asynchronous unmount as BSD names can be reused.
+        try requireIdentity(identity, remount: action == "remount", allowWriting: allowWriting)
         if action == "remount" {
             try await withCheckedThrowingContinuation { continuation in
                 let context = Unmanaged.passRetained(DiskOperation(continuation)).toOpaque()

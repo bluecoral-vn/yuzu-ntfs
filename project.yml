@@ -129,6 +129,7 @@ targets:
       - package: NTFSCore
         product: NTFSBridge
       - sdk: FSKit.framework
+      - sdk: DiskArbitration.framework
       - sdk: ExtensionFoundation.framework
 schemes:
   YuzuNTFS:

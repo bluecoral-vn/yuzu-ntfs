@@ -36,13 +36,15 @@ struct BetaPolicyTests {
         #expect(!BetaPolicy.admits(serial: serial, acknowledgement: Data("acknowledged-v1\n".utf8), allowlist: "0000000000001234\nbad", clean: true))
     }
     @Test func statusRoundTripAndMalformedRejection() throws {
-        let status = VolumeStatus(serial: 0x1234, device: "disk4s1", writable: false, reason: .hibernated)
+        let identity = DiskIdentity(device: "disk4s1", volumeUUID: NTFSBootSector.volumeUUID(serial: 0x1234),
+            mediaUUID: nil, appearedAt: Date(timeIntervalSinceReferenceDate: 1), fileSystem: "yuzuntfs", deviceWritable: true)
+        let status = VolumeStatus(serial: 0x1234, identity: identity, writable: false, reason: .hibernated)
         #expect(try JSONDecoder().decode(VolumeStatus.self, from: JSONEncoder().encode(status)) == status)
         #expect(throws: (any Error).self) { try JSONDecoder().decode(VolumeStatus.self, from: Data("{\"serial\":1}".utf8)) }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try status.write(at: root)
-        #expect(try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: root.appendingPathComponent("status-disk4s1.json"))) == status)
+        #expect(try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: root.appendingPathComponent(status.fileName))) == status)
     }
     @Test func preferencesRequireAcknowledgementAndRejectSignedHex() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -9,12 +9,14 @@ import UserNotifications
 
 struct TrialDrive: Identifiable {
     var id: String
+    var identity: DiskIdentity
     var name: String
     var mount: String?
     var size: Int64
     var free: Int64
     var status: VolumeStatus?
     var writable: Bool
+    var mountedWritable: Bool
 }
 
 @MainActor @Observable final class TrialModel {
@@ -39,7 +41,7 @@ struct TrialDrive: Identifiable {
             }
         }
     }
-    private var notified = Set<String>()
+    private var notified = Set<DiskIdentity>()
     private let logger = Logger(subsystem: "com.bluecoral.vn.yuzuntfs", category: "App")
     var directory: URL? { BetaPolicy.directory }
     func refresh() async {
@@ -57,24 +59,28 @@ struct TrialDrive: Identifiable {
             for id in candidates {
                 let info = try await SystemOperations.run("/usr/sbin/diskutil", ["info", "-plist", id])
                 guard let values = try PropertyListSerialization.propertyList(from: info.data, format: nil) as? [String: Any] else { continue }
-                let kind = (values["FilesystemType"] as? String ?? "").lowercased()
                 let content = (values["Content"] as? String ?? "").lowercased()
-                let status = directory.flatMap { try? Data(contentsOf: $0.appendingPathComponent("status-\(id).json")) }.flatMap { try? JSONDecoder().decode(VolumeStatus.self, from: $0) }
-                guard kind.contains("ntfs") || content.contains("ntfs") || status != nil else { continue }
+                guard let identity = operations?.identity(device: id),
+                      identity.isNTFS || (identity.fileSystem.isEmpty && content == "windows_ntfs") else { continue }
+                var status = VolumeStatus.read(for: identity, at: directory)
+                if !identity.deviceWritable, status?.reason.permitsWriteRemount == true {
+                    status?.writable = false; status?.reason = .deviceReadOnly
+                }
                 let mount = values["MountPoint"] as? String
                 let actualYuzuRW = mountLines.contains { $0.hasPrefix("/dev/\(id) on ") && $0.contains("(yuzuntfs,") && !$0.contains("read-only") }
-                let writable = mount != nil && actualYuzuRW && status?.writable == true
-                result.append(TrialDrive(id: id, name: values["VolumeName"] as? String ?? values["MediaName"] as? String ?? id, mount: mount,
-                    size: (values["TotalSize"] as? NSNumber)?.int64Value ?? 0, free: ((values["FreeSpace"] ?? values["VolumeFreeSpace"]) as? NSNumber)?.int64Value ?? 0, status: status, writable: writable))
-                if let reason = status?.reason, Self.unsafe(reason), !notified.contains(id) {
-                    notified.insert(id)
+                let writable = mount != nil && actualYuzuRW && identity.deviceWritable && status?.writable == true
+                result.append(TrialDrive(id: id, identity: identity, name: values["VolumeName"] as? String ?? values["MediaName"] as? String ?? id, mount: mount,
+                    size: (values["TotalSize"] as? NSNumber)?.int64Value ?? 0, free: ((values["FreeSpace"] ?? values["VolumeFreeSpace"]) as? NSNumber)?.int64Value ?? 0,
+                    status: status, writable: writable, mountedWritable: actualYuzuRW))
+                if let reason = status?.reason, Self.unsafe(reason), !notified.contains(identity) {
+                    notified.insert(identity)
                     let content = UNMutableNotificationContent(); content.title = String(localized: "Drive is read-only")
                     content.body = Self.explanation(reason)
                     try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
                 }
             }
             drives = result
-            notified.formIntersection(Set(result.map(\.id)))
+            notified.formIntersection(Set(result.map(\.identity)))
         } catch { logger.error("Status refresh: \(error.localizedDescription)") }
     }
     func execute(_ operation: () async throws -> Void) async {
@@ -112,18 +118,22 @@ struct TrialDrive: Identifiable {
     }
     func setWriting(_ value: Bool, drive: TrialDrive) async {
         await execute {
-            guard let directory, let status = drive.status, let operations else { throw POSIXError(.ENODEV) }
+            guard let directory, let operations, let identity = operations.identity(device: drive.id),
+                  identity.sameAttachment(as: drive.identity),
+                  let status = VolumeStatus.read(for: identity, at: directory) else { throw POSIXError(.ENODEV) }
             guard !value || acknowledged else { throw POSIXError(.EPERM) }
             try BetaPolicy.setAllowed(value, serial: status.serial, at: directory)
-            let writable = value && status.reason.permitsWriteRemount
+            let writable = value && identity.deviceWritable && status.reason.permitsWriteRemount
             // Preserve the existing RO mount when safety/device state overrides opt-in.
             // The extension still probes independently before any actual RW mount.
-            guard drive.writable != writable else { return }
+            guard drive.mountedWritable != writable else { return }
             // A failed/busy unmount never force-unmounts. The preference remains for the next clean mount.
-            try await operations.perform(device: drive.id, action: "remount", allowWriting: writable)
+            try await operations.perform(identity: identity, action: "remount", allowWriting: writable)
         }
     }
-    func eject(_ drive: TrialDrive) async { await execute { try await operations?.perform(device: drive.id, action: "eject") } }
+    func eject(_ drive: TrialDrive) async {
+        await execute { try await operations?.perform(identity: drive.identity, action: "eject") }
+    }
     func open(_ drive: TrialDrive) { if let mount = drive.mount { NSWorkspace.shared.open(URL(fileURLWithPath: mount)) } }
     func openSettings() {
         if #available(macOS 27.0, *) { FSClient.shared.openFileSystemExtensionsSettings() }
