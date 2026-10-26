@@ -11,6 +11,22 @@ macOS 26+ · Apple silicon · <b>Beta 0.1</b></p>
 
 Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu NTFS adds full NTFS support to macOS, so the drive works in Finder like any other disk.
 
+## Love it? Help it grow 🍋
+
+> 🎁 **Yuzu NTFS is free.** Your support keeps it updated for new macOS versions and funds new Yuzu apps.
+
+<p>
+  <a href="https://wise.com/pay/me/nguyenl447"><img src="https://img.shields.io/badge/Donate-via%20Wise-9FE870?style=for-the-badge&logo=wise&logoColor=163300" alt="Donate via Wise"></a>
+</p>
+
+Or tell a friend who uses Windows drives on a Mac — one click shares it for you:
+
+<p>
+  <a href="https://twitter.com/intent/tweet?text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at&url=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Share on X"></a>
+  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" alt="Share on Facebook"></a>
+  <a href="https://www.linkedin.com/feed/?shareActive=true&text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at%20https%3A//yuzu.today"><img src="https://img.shields.io/badge/Share%20on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="Share on LinkedIn"></a>
+</p>
+
 ## What you can do
 
 | | |
@@ -32,22 +48,6 @@ Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu 
 > **Beta note:** writing is still being tested. In this beta, drives open **read-only** so your files stay safe. Keep a backup of anything you can't replace.
 
 **Good to know:** encrypted (BitLocker) drives and formatting disks as NTFS aren't supported. For a brand-new disk shared between Mac and Windows, exFAT is the simplest choice.
-
-## Love it? Help it grow 🍋
-
-Yuzu NTFS is free. Your support keeps it updated for new macOS versions and funds new Yuzu apps.
-
-<p>
-  <a href="https://wise.com/pay/me/nguyenl447"><img src="https://img.shields.io/badge/Donate-via%20Wise-9FE870?style=for-the-badge&logo=wise&logoColor=163300" alt="Donate via Wise"></a>
-</p>
-
-Or tell a friend who uses Windows drives on a Mac — one click shares it for you:
-
-<p>
-  <a href="https://twitter.com/intent/tweet?text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at&url=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Share on X"></a>
-  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" alt="Share on Facebook"></a>
-  <a href="https://www.linkedin.com/feed/?shareActive=true&text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at%20https%3A//yuzu.today"><img src="https://img.shields.io/badge/Share%20on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="Share on LinkedIn"></a>
-</p>
 
 ## Found a problem or have an idea?
 
