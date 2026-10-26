@@ -14,3 +14,4 @@ xcuserdata/
 .superpowers/
 __pycache__/
 *.pyc
+.github/

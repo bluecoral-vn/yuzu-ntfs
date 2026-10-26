@@ -30,15 +30,15 @@ Or tell a friend who uses Windows drives on a Mac — one click shares it for yo
 
 ## What you can do
 
-| | |
-|---|---|
-| 🔌 **Plug in and go** | NTFS drives mount automatically in Finder. No Terminal, no extra steps. |
-| ✏️ **Read and write** | Copy, save, rename and delete files on drives that come from Windows PCs. |
-| 🛡️ **Your data comes first** | If Windows didn't shut down cleanly (Fast Startup, hibernation) or the drive needs checking, it opens **read-only** instead of risking your files. Nothing is changed behind your back. |
-| 🔒 **Keeps your Mac secure** | No kernel extension, no Recovery Mode, no lowering security settings, no restart. Uninstall by dragging the app to the Trash. |
-| ⚡ **Fast** | File data moves straight between the drive and macOS, so copies run close to the drive's own speed. |
-| 🪟 **Windows-friendly** | Names, folders, links and Mac file info are stored in ways Windows understands. No `._` clutter files. |
-| 🍋 **Lives in the menu bar** | See each NTFS drive, free space, RW/RO status and read-only reasons; open, eject or opt in to writing per drive. |
+<table>
+  <tr><td>🔌&nbsp;<b>Plug&nbsp;in&nbsp;and&nbsp;go</b></td><td>NTFS drives mount automatically in Finder. No Terminal, no extra steps.</td></tr>
+  <tr><td>✏️&nbsp;<b>Read&nbsp;and&nbsp;write</b></td><td>Copy, save, rename and delete files on drives that come from Windows PCs.</td></tr>
+  <tr><td>🛡️&nbsp;<b>Your&nbsp;data&nbsp;comes&nbsp;first</b></td><td>If Windows didn't shut down cleanly (Fast Startup, hibernation) or the drive needs checking, it opens <b>read-only</b> instead of risking your files. Nothing is changed behind your back.</td></tr>
+  <tr><td>🔒&nbsp;<b>Keeps&nbsp;your&nbsp;Mac&nbsp;secure</b></td><td>No kernel extension, no Recovery Mode, no lowering security settings, no restart. Uninstall by dragging the app to the Trash.</td></tr>
+  <tr><td>⚡&nbsp;<b>Fast</b></td><td>File data moves straight between the drive and macOS, so copies run close to the drive's own speed.</td></tr>
+  <tr><td>🪟&nbsp;<b>Windows-friendly</b></td><td>Names, folders, links and Mac file info are stored in ways Windows understands. No <code>._</code> clutter files.</td></tr>
+  <tr><td>🍋&nbsp;<b>Lives&nbsp;in&nbsp;the&nbsp;menu&nbsp;bar</b></td><td>See each NTFS drive, free space, RW/RO status and read-only reasons; open, eject or opt in to writing per drive.</td></tr>
+</table>
 
 ## Download
 
@@ -64,7 +64,7 @@ This beta has **no automatic updater**. To update, eject all FSKit drives, quit 
 
 ## Found a problem or have an idea?
 
-[**Open an issue**](https://github.com/bluecoral-vn/yuzu-ntfs/issues/new/choose) and pick a form: 🐞 Bug report · 🚨 Data safety (files lost or damaged — we look at these first) · ✨ Feature request · 💬 Question.
+[**Open an issue**](https://github.com/bluecoral-vn/yuzu-ntfs/issues/new) — tell us what happened, your macOS version and your drive. Lost or damaged files? Say so in the title; we look at those first.
 
 ## More from Yuzu Apps
 
