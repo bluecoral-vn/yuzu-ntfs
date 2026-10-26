@@ -24,8 +24,9 @@ import Sparkle
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "--qa-update-feed"),
               arguments.indices.contains(index + 1),
-              let url = URL(string: arguments[index + 1]), url.isFileURL,
-              url.path.hasPrefix("/Volumes/My Shared Files/") else { return nil }
+              let url = URL(string: arguments[index + 1]),
+              url.scheme == "http", url.host == "192.168.64.1", url.port == 8787,
+              url.path == "/appcast-local.xml" else { return nil }
         var virtualized: Int32 = 0
         var size = MemoryLayout<Int32>.size
         guard sysctlbyname("kern.hv_vmm_present", &virtualized, &size, nil, 0) == 0,
