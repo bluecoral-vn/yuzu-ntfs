@@ -104,7 +104,12 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         super.init(volumeID: FSVolume.Identifier(uuid: boot.volumeUUID), volumeName: FSFileName(string: "Yuzu-NTFS"))
         publishStatus()
     }
-    deinit { checkpointTimer?.cancel(); if let core { _ = api.nb_dispose!(core) } }
+    deinit {
+        checkpointTimer?.cancel()
+        if let core { _ = api.nb_dispose!(core) }
+        // Callback I/O is drained; deinit owns the remaining state exclusively.
+        withdrawStatusLocked()
+    }
     private func discardCore() {
         checkpointTimer?.cancel()
         checkpointTimer = nil
@@ -113,13 +118,12 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         device.metadataActive = false
     }
     private func check(_ code: Int32) throws { if code != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(code)) } }
-    func withdrawStatus() {
-        serial {
-            defer { sharedStatus = nil }
-            guard let statusDirectory, let sharedStatus else { return }
-            do { try sharedStatus.remove(at: statusDirectory) }
-            catch { Self.p0Log.error("Cannot remove volume status: \(error.localizedDescription)") }
-        }
+    func withdrawStatus() { serial { withdrawStatusLocked() } }
+    private func withdrawStatusLocked() {
+        defer { sharedStatus = nil }
+        guard let statusDirectory, let sharedStatus else { return }
+        do { try sharedStatus.remove(at: statusDirectory) }
+        catch { Self.p0Log.error("Cannot remove volume status: \(error.localizedDescription)") }
     }
     private func serial<T>(_ body: () throws -> T) rethrows -> T {
         try items.withLock {
@@ -307,10 +311,15 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             checkpointTimer?.cancel()
             checkpointTimer = nil
             if let core { _ = api.nb_sync!(core); _ = api.nb_unmount!(core); self.core = nil }
+            withdrawStatusLocked()
         }
         reply()
     }
-    func deactivate(options: FSDeactivateOptions, replyHandler reply: @escaping ((any Error)?) -> Void) { serial { discardCore() }; reply(nil) }
+    func deactivate(options: FSDeactivateOptions, replyHandler reply: @escaping ((any Error)?) -> Void) {
+        // Normal macOS eject delivers deactivate, not necessarily unloadResource.
+        serial { discardCore(); withdrawStatusLocked() }
+        reply(nil)
+    }
     func synchronize(flags: FSSyncFlags, replyHandler reply: @escaping ((any Error)?) -> Void) {
         do { try serial { try check(api.nb_sync!(core)) }; reply(nil) } catch { reply(error) }
     }

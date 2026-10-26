@@ -190,6 +190,33 @@ private func publishedStatusURL(in directory: URL) throws -> URL {
     #expect(!status.writable && status.reason == .engineError)
 }
 
+@Test func normalVolumeDeactivationWithdrawsStatusWithoutFilesystemUnload() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let core = HandlerCore(), volume = try core.volume(statusDirectory: directory)
+    volume.forceReadOnlyURL = directory.appendingPathComponent("unused-force-ro")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    let file = try publishedStatusURL(in: directory)
+    volume.deactivate(options: []) { error in #expect(error == nil) }
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    volume.withdrawStatus()
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    #expect(core.closes == 1)
+}
+
+@Test func unactivatedVolumeDeinitWithdrawsItsOwnPublishedStatus() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let core = HandlerCore()
+    var file: URL?
+    try autoreleasepool {
+        let volume = try core.volume(statusDirectory: directory)
+        file = try publishedStatusURL(in: directory)
+        withExtendedLifetime(volume) {}
+    }
+    #expect(!FileManager.default.fileExists(atPath: try #require(file).path))
+}
+
 @Test func effectiveReadOnlyRejectsWriteOpenAndInhibitsResidentPublication() throws {
     let core = HandlerCore(), volume = try core.volume()
     var root: FSItem?
