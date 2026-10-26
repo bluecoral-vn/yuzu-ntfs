@@ -17,6 +17,13 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
             let actual = try device.read(into: UnsafeMutableRawBufferPointer(start: buffer, count: count),
                                          startingAt: 0, length: count)
             guard actual >= 0, actual <= count else { throw POSIXError(.EIO) }
+            if NTFSBootSector.isBitLocker(UnsafeRawBufferPointer(start: buffer, count: actual)) {
+                if let directory = BetaPolicy.directory {
+                    try? VolumeStatus(serial: 0, device: device.bsdName, writable: false, reason: .bitlocker).write(at: directory)
+                }
+                replyHandler(.notRecognized, nil)
+                return
+            }
             let sector = try NTFSBootSector.parse(UnsafeRawBufferPointer(start: buffer, count: actual))
             replyHandler(.usable(name: "NTFS", containerID: FSContainerIdentifier(uuid: sector.volumeUUID)), nil)
         } catch is NTFSProbeError {

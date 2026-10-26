@@ -79,6 +79,7 @@ struct DriveCard: View {
 
 struct OnboardingView: View {
     @Bindable var model: TrialModel
+    var done: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -107,7 +108,7 @@ struct OnboardingView: View {
             }
             Text("Plug in an NTFS drive. It starts read-only. In the menu bar, turn on Allow writing (beta) for each drive you trust. Hibernated or dirty drives always stay read-only.")
             if let message = model.message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
-            HStack { Link("Help & report an issue", destination: URL(string: "https://github.com/bluecoral-vn/yuzu-ntfs/issues/new/choose")!); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            HStack { Link("Help & report an issue", destination: URL(string: "https://github.com/bluecoral-vn/yuzu-ntfs/issues/new/choose")!); Spacer(); Button("Done") { if let done { done() } else { dismiss() } }.keyboardShortcut(.defaultAction) }
         }.padding(28).frame(width: 580).fixedSize(horizontal: false, vertical: true)
     }
 }

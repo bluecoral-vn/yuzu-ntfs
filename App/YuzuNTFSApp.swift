@@ -4,13 +4,13 @@ import SwiftUI
 
 @main
 struct YuzuNTFSApp: App {
-    @State private var model = TrialModel()
+    @NSApplicationDelegateAdaptor(TrialAppDelegate.self) private var delegate
+    private var model: TrialModel { delegate.model }
     var body: some Scene {
         MenuBarExtra("Yuzu NTFS", systemImage: "externaldrive") { TrialMenu(model: model) }
             .menuBarExtraStyle(.window)
         Window("Yuzu NTFS — Set up", id: "onboarding") {
             OnboardingView(model: model)
-                .task { model.start() }
         }.windowResizability(.contentSize)
         Window("About Yuzu NTFS", id: "about") { AboutView() }
             .windowResizability(.contentSize).defaultLaunchBehavior(.suppressed)

@@ -17,6 +17,10 @@ public struct NTFSBootSector: Sendable {
     public let mftRecordSize: UInt32
     public let indexRecordSize: UInt32
     public let serial: UInt64
+    public static func isBitLocker(_ bytes: UnsafeRawBufferPointer) -> Bool {
+        bytes.count >= 11 && bytes[3] == 0x2d && bytes[4] == 0x46 && bytes[5] == 0x56
+            && bytes[6] == 0x45 && bytes[7] == 0x2d && bytes[8] == 0x46 && bytes[9] == 0x53 && bytes[10] == 0x2d
+    }
 
     public static func parse(_ bytes: UnsafeRawBufferPointer) throws(NTFSProbeError) -> NTFSBootSector {
         guard bytes.count >= 512 else { throw .invalidGeometry("Boot sector shorter than 512 bytes") }
