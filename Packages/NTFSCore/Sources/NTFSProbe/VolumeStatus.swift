@@ -12,11 +12,12 @@ public enum ReadOnlyReason: String, Codable, Sendable {
         case .deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError: false
         }
     }
-    public static func forCleanDevice(writable: Bool, acknowledged: Bool, allowed: Bool, requestedReadOnly: Bool) -> Self {
-        if !writable { return .deviceReadOnly }
+    public static func forCleanDevice(mediaWritable: Bool, resourceWritable: Bool,
+                                      acknowledged: Bool, allowed: Bool, requestedReadOnly: Bool) -> Self {
+        if !mediaWritable { return .deviceReadOnly }
         if !acknowledged { return .acknowledgementRequired }
         if !allowed { return .notAllowed }
-        if requestedReadOnly { return .requestedReadOnly }
+        if requestedReadOnly || !resourceWritable { return .requestedReadOnly }
         return .writable
     }
 }

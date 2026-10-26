@@ -70,11 +70,12 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         let acknowledged = BetaPolicy.acknowledged(at: directory)
         let allowlist = directory.flatMap { try? String(contentsOf: $0.appendingPathComponent("write-serials.txt"), encoding: .utf8) }
         let allowed = WriteAllowlist.permits(serial: boot.serial, contents: allowlist)
+        let identity = DiskIdentity.read(device: device.bsdName)
         let clean = probeError == 0 && state == NB_CLEAN
-        let writable = !readOnly && device.isWritable && BetaPolicy.admits(serial: boot.serial,
+        let writable = !readOnly && device.isWritable && identity?.deviceWritable == true && BetaPolicy.admits(serial: boot.serial,
             acknowledgement: acknowledged ? BetaPolicy.acknowledgement : nil, allowlist: allowlist, clean: clean)
         let reason: ReadOnlyReason
-        if probeError != 0 { reason = .engineError }
+        if probeError != 0 || identity == nil { reason = .engineError }
         else if !clean {
             switch state {
             case NB_HIBERNATED: reason = .hibernated
@@ -85,10 +86,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             default: reason = .unsupported
             }
         } else {
-            reason = .forCleanDevice(writable: device.isWritable, acknowledged: acknowledged,
-                                     allowed: allowed, requestedReadOnly: readOnly)
+            reason = .forCleanDevice(mediaWritable: identity?.deviceWritable == true, resourceWritable: device.isWritable,
+                                     acknowledged: acknowledged, allowed: allowed, requestedReadOnly: readOnly)
         }
-        let status = DiskIdentity.read(device: device.bsdName).map {
+        let status = identity.map {
             VolumeStatus(serial: boot.serial, identity: $0, writable: writable, reason: reason)
         }
         self.init(device: adapter, boot: boot, writable: writable, api: api, status: status, statusDirectory: directory)

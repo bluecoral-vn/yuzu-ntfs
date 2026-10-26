@@ -8,11 +8,22 @@ struct BetaPolicyTests {
         for acknowledged in [false, true] {
             for allowed in [false, true] {
                 for requestedReadOnly in [false, true] {
-                    #expect(ReadOnlyReason.forCleanDevice(writable: false, acknowledged: acknowledged,
-                        allowed: allowed, requestedReadOnly: requestedReadOnly) == .deviceReadOnly)
+                    for resourceWritable in [false, true] {
+                        #expect(ReadOnlyReason.forCleanDevice(mediaWritable: false, resourceWritable: resourceWritable,
+                            acknowledged: acknowledged, allowed: allowed, requestedReadOnly: requestedReadOnly) == .deviceReadOnly)
+                    }
                 }
             }
         }
+    }
+    @Test func ordinaryROResourceOnWritableMediaRetainsActionableReason() {
+        #expect(ReadOnlyReason.forCleanDevice(mediaWritable: true, resourceWritable: false,
+            acknowledged: false, allowed: false, requestedReadOnly: false) == .acknowledgementRequired)
+        #expect(ReadOnlyReason.forCleanDevice(mediaWritable: true, resourceWritable: false,
+            acknowledged: true, allowed: false, requestedReadOnly: false) == .notAllowed)
+        let reason = ReadOnlyReason.forCleanDevice(mediaWritable: true, resourceWritable: false,
+            acknowledged: true, allowed: true, requestedReadOnly: false)
+        #expect(reason == .requestedReadOnly && reason.permitsWriteRemount)
     }
     @Test func unsafeReasonsNeverRequestWritableRemount() {
         for reason: ReadOnlyReason in [.deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError] {
