@@ -64,6 +64,8 @@ struct BetaPolicyTests {
     @Test func remountConstructionSupportsVolumeDevicesAndRejectsInjection() throws {
         #expect(try RemountRequest(device: "disk4s1").devicePath == "/dev/disk4s1")
         #expect(try RemountRequest(device: "disk4").devicePath == "/dev/disk4")
+        #expect(try RemountRequest(device: "disk4", allowWriting: true).mountOption == "rw")
+        #expect(try RemountRequest(device: "disk4", allowWriting: false).mountOption == "rdonly")
         for input in ["/dev/disk4", "disk4;echo", "", "diskx", "disk4/../disk0"] {
             #expect(throws: (any Error).self) { try RemountRequest(device: input) }
         }

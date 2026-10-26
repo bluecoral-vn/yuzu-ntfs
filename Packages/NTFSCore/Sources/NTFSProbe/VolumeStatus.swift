@@ -22,8 +22,10 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
 
 public struct RemountRequest: Sendable {
     public let devicePath: String
-    public init(device: String) throws {
+    public let mountOption: String
+    public init(device: String, allowWriting: Bool = false) throws {
         guard device.wholeMatch(of: /disk[0-9]+(s[0-9]+)*/) != nil else { throw POSIXError(.EINVAL) }
         devicePath = "/dev/" + device
+        mountOption = allowWriting ? "rw" : "rdonly"
     }
 }

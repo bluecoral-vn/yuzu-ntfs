@@ -63,8 +63,8 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
         self.session = session
         DASessionSetDispatchQueue(session, .main)
     }
-    func perform(device: String, action: String) async throws {
-        let request = try RemountRequest(device: device)
+    func perform(device: String, action: String, allowWriting: Bool = false) async throws {
+        let request = try RemountRequest(device: device, allowWriting: allowWriting)
         guard let disk = DADiskCreateFromBSDName(kCFAllocatorDefault, session, request.devicePath) else { throw POSIXError(.ENODEV) }
         if action == "remount" || action == "eject" {
             try await withCheckedThrowingContinuation { continuation in
@@ -75,7 +75,10 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
         if action == "remount" {
             try await withCheckedThrowingContinuation { continuation in
                 let context = Unmanaged.passRetained(DiskOperation(continuation)).toOpaque()
-                DADiskMount(disk, nil, DADiskMountOptions(kDADiskMountOptionDefault), diskReply, context)
+                var arguments: [CFString?] = [request.mountOption as CFString, nil]
+                arguments.withUnsafeMutableBufferPointer {
+                    DADiskMountWithArguments(disk, nil, DADiskMountOptions(kDADiskMountOptionDefault), diskReply, context, $0.baseAddress)
+                }
             }
         } else if action == "eject" {
             // Eject the containing media, not just an NTFS partition.

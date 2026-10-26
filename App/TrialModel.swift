@@ -116,7 +116,7 @@ struct TrialDrive: Identifiable {
             guard !value || acknowledged else { throw POSIXError(.EPERM) }
             try BetaPolicy.setAllowed(value, serial: status.serial, at: directory)
             // A failed/busy unmount never force-unmounts. The preference remains for the next clean mount.
-            try await operations.perform(device: drive.id, action: "remount")
+            try await operations.perform(device: drive.id, action: "remount", allowWriting: value)
         }
     }
     func eject(_ drive: TrialDrive) async { await execute { try await operations?.perform(device: drive.id, action: "eject") } }
