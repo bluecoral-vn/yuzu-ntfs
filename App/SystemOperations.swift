@@ -55,7 +55,14 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
     guard let context else { return }
     let operation = Unmanaged<DiskOperation>.fromOpaque(context).takeRetainedValue()
     if let dissenter {
-        operation.continuation.resume(throwing: NSError(domain: "DiskArbitration", code: Int(DADissenterGetStatus(dissenter)), userInfo: [NSLocalizedDescriptionKey: (DADissenterGetStatusString(dissenter) as String?) ?? String(localized: "The drive is busy. Close files and try again.")]))
+        let status = DADissenterGetStatus(dissenter)
+        let reason = (DADissenterGetStatusString(dissenter) as String?)
+            ?? (status > 0 && status <= ELAST
+                ? String(cString: strerror(status))
+                : NSError(domain: NSMachErrorDomain, code: Int(status)).localizedDescription)
+        let description = "\(reason) (Disk Arbitration \(String(format: "0x%08X", status)))."
+        operation.continuation.resume(throwing: NSError(domain: "DiskArbitration", code: Int(status),
+            userInfo: [NSLocalizedDescriptionKey: description]))
     } else { operation.continuation.resume() }
 }
 

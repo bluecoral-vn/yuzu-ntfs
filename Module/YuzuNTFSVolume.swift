@@ -108,6 +108,13 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             return try body()
         }
     }
+    /// Maintenance must not issue plain resource reads alongside active KOIO/cache I/O.
+    func withUnactivatedResource<T>(_ body: () throws -> T) throws -> T {
+        try serial {
+            guard core == nil else { throw POSIXError(.EBUSY) }
+            return try body()
+        }
+    }
     private func node(_ item: FSItem) throws -> YuzuNTFSItem {
         guard let node = item as? YuzuNTFSItem else { throw POSIXError(.EINVAL) }
         return node
