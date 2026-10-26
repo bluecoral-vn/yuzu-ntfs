@@ -26,7 +26,7 @@ public enum ModuleSettings {
         return backup
     }
     public static func hasActiveVolumes(_ inventory: String, home: String) throws -> Bool {
-        let native: Set<String> = ["apfs", "hfs", "nullfs", "devfs", "autofs", "nfs", "smbfs", "webdav", "udf", "cd9660", "msdos", "exfat"]
+        let native: Set<String> = ["apfs", "hfs", "nullfs", "devfs", "autofs", "nfs", "smbfs", "webdav", "udf", "cd9660", "msdos", "exfat", "applevirtiofs"]
         var coreDeviceSeen = false
         for line in inventory.split(separator: "\n") {
             guard let on = line.range(of: " on "), let optionsStart = line.range(of: " (", options: .backwards), line.hasSuffix(")") else { throw CocoaError(.fileReadCorruptFile) }

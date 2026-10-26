@@ -7,6 +7,7 @@ import Testing
     #expect(UpdateSafety.shouldPostpone(mountInventory: "invalid", home: "/Users/test"))
     #expect(UpdateSafety.shouldPostpone(mountInventory: "/dev/disk9 on /Volumes/Test (yuzuntfs, local)", home: "/Users/test"))
     #expect(!UpdateSafety.shouldPostpone(mountInventory: "/dev/disk1 on / (apfs, local)", home: "/Users/test"))
+    #expect(!UpdateSafety.shouldPostpone(mountInventory: "/dev/disk0 on /Volumes/My Shared Files (AppleVirtIOFS, local, automounted)", home: "/Users/test"))
 }
 @Test func updateReenableRequiresNewBuildAndSafeInventory() {
     #expect(UpdateSafety.shouldReenable(previousBuild: "3", currentBuild: "4", wasEnabled: true, moduleEnabled: false, activeVolumes: false))

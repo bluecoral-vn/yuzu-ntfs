@@ -8,7 +8,7 @@ struct TrialMenu: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("Yuzu NTFS").font(.title3.bold()); Spacer(); Text("0.1.1 Beta").font(.caption).foregroundStyle(.secondary) }
+            HStack { Text("Yuzu NTFS").font(.title3.bold()); Spacer(); Text(TrialModel.version + " Beta").font(.caption).foregroundStyle(.secondary) }
             if !model.enabled {
                 Button("Extension not enabled — Fix") { openWindow(id: "onboarding") }.buttonStyle(.borderedProminent)
             }
@@ -89,7 +89,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 16) {
                 Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage()).resizable().frame(width: 72, height: 72)
-                VStack(alignment: .leading, spacing: 4) { Text("Welcome to Yuzu NTFS").font(.title.bold()); Text("0.1.1 Beta · Apple silicon · macOS 26+").foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 4) { Text("Welcome to Yuzu NTFS").font(.title.bold()); Text(TrialModel.version + " Beta · Apple silicon · macOS 26+").foregroundStyle(.secondary) }
             }
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
@@ -122,9 +122,9 @@ struct AboutView: View {
         VStack(spacing: 16) {
             Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage()).resizable().frame(width: 96, height: 96)
             Text("Yuzu NTFS").font(.largeTitle.bold())
-            Text("0.1.0 Beta (2)")
+            Text(TrialModel.version + " Beta (" + TrialModel.build + ")")
             Text("Free and open source · GNU GPL version 2 only").foregroundStyle(.secondary)
-            Text("No telemetry. Diagnostics are exported only when you choose. Updates are manual for this beta.").multilineTextAlignment(.center)
+            Text("No telemetry. Diagnostics are exported only when you choose. Signed updates are delivered through yuzu.today.").multilineTextAlignment(.center)
             HStack { Link("yuzu.today", destination: URL(string: "https://yuzu.today")!); Link("GitHub & GPL source", destination: URL(string: "https://github.com/bluecoral-vn/yuzu-ntfs")!); Link("Report an issue", destination: URL(string: "https://github.com/bluecoral-vn/yuzu-ntfs/issues/new/choose")!) }
             HStack { Link("Support via Wise", destination: URL(string: "https://wise.com/pay/me/nguyenl447")!); Link("Support via PayPal", destination: URL(string: "https://paypal.me/nguyenrom")!) }
         }.padding(30).frame(width: 500)

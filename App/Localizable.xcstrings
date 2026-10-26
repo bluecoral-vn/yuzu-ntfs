@@ -467,18 +467,18 @@
         }
       }
     },
-    "No telemetry. Diagnostics are exported only when you choose. Updates are manual for this beta.": {
+    "No telemetry. Diagnostics are exported only when you choose. Signed updates are delivered through yuzu.today.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No telemetry. Diagnostics are exported only when you choose. Updates are manual for this beta."
+            "value": "No telemetry. Diagnostics are exported only when you choose. Signed updates are delivered through yuzu.today."
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Không thu thập dữ liệu sử dụng. Chỉ xuất chẩn đoán khi bạn yêu cầu. Bản beta này cần cập nhật thủ công."
+            "value": "Không thu thập dữ liệu sử dụng. Chỉ xuất chẩn đoán khi bạn yêu cầu. Bản cập nhật có chữ ký được phân phối qua yuzu.today."
           }
         }
       }

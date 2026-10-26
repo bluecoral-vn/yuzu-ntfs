@@ -21,6 +21,7 @@ import NTFSProbe
         case "ack": await model.acknowledge()
         case "enable": await model.setEnabled(true)
         case "disable": await model.setEnabled(false)
+        case "check-updates": model.updates.check()
         case "writing-on", "writing-off":
             if let drive = model.drives.first(where: { $0.id == command["device"] }) { await model.setWriting(command["action"] == "writing-on", drive: drive) }
             else { model.message = "QA drive not found" }
@@ -40,7 +41,8 @@ import NTFSProbe
         default: model.message = "Unknown QA action"
         }
         await model.refresh()
-        let result: [String: Any] = ["id": command["id"] ?? "", "enabled": model.enabled, "acknowledged": model.acknowledged,
+        let result: [String: Any] = ["id": command["id"] ?? "", "version": TrialModel.version, "build": TrialModel.build,
+            "enabled": model.enabled, "acknowledged": model.acknowledged,
             "error": model.message ?? "", "drives": model.drives.map { drive -> [String: Any] in
                 ["device": drive.id, "name": drive.name, "mount": drive.mount ?? "", "writable": drive.writable,
                  "allowed": model.isAllowed(drive), "reason": drive.reason?.rawValue ?? "unknown", "serial": drive.status.map { String(format: "%016llX", $0.serial) } ?? ""]
