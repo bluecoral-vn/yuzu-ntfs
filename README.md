@@ -5,7 +5,7 @@
 <h1 align="center">Yuzu NTFS</h1>
 
 <p align="center"><b>Use Windows (NTFS) drives on your Mac — just plug in.</b><br>
-macOS 26+ · Apple silicon · <b>Beta 0.1</b></p>
+macOS 26+ · Apple silicon and Intel (experimental) · <b>Beta 0.1.2</b></p>
 
 ---
 
@@ -43,10 +43,10 @@ Or tell a friend who uses Windows drives on a Mac — one click shares it for yo
 ## Download
 
 <p>
-  <a href="https://yuzu.today/ntfs/download"><img src="https://img.shields.io/badge/Download-Yuzu%20NTFS%200.1.1%20Beta-FFC93C?style=for-the-badge&logo=apple&logoColor=163300" alt="Download Yuzu NTFS 0.1.1 Beta"></a>
+  <a href="https://yuzu.today/ntfs/download"><img src="https://img.shields.io/badge/Download-Yuzu%20NTFS%200.1.2%20Beta-FFC93C?style=for-the-badge&logo=apple&logoColor=163300" alt="Download Yuzu NTFS 0.1.2 Beta"></a>
 </p>
 
-Signed and notarized by Apple · **Apple silicon, macOS 26 or newer** · [all releases](https://github.com/bluecoral-vn/yuzu-ntfs/releases). Open the DMG and drag **Yuzu NTFS.app** into Applications before opening it.
+Signed and notarized by Apple · **Apple silicon and Intel (experimental), macOS 26 or newer** · [all releases](https://github.com/bluecoral-vn/yuzu-ntfs/releases). Open the DMG and drag **Yuzu NTFS.app** into Applications before opening it. Intel support is experimental in this beta: compiled and structurally checked, but not yet tested on Intel hardware. Intel Macs support macOS up to version 26.
 
 Yuzu NTFS checks for updates automatically through **yuzu.today**; use **Check for Updates…** in the menu to check manually, or change automatic checks in settings. Eject Yuzu NTFS and other FSKit drives before installation; a waiting update resumes after ejecting. **0.1.0 users must install 0.1.1 manually once** (eject drives, quit, replace the app in Applications). Subsequent updates use Sparkle.
  

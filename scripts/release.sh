@@ -7,7 +7,7 @@ OUT="$ROOT/build/direct"
 BUILD_SETTINGS=()
 if [[ "${YUZU_QA_RELEASE:-0}" == 1 ]]; then
   OUT="$ROOT/build/update-qa"
-  BUILD_SETTINGS=(MARKETING_VERSION=0.1.2 CURRENT_PROJECT_VERSION=4)
+  BUILD_SETTINGS=(MARKETING_VERSION=0.1.3 CURRENT_PROJECT_VERSION=5)
 fi
 TOOLS="$ROOT/build/sparkle/2.10.0"
 mkdir -p "$OUT" "$TOOLS"
@@ -41,7 +41,7 @@ xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
 cp "$DMG" "$FEED/"
-"$TOOLS/bin/generate_appcast" --account yuzu-ntfs --download-url-prefix https://yuzu.today/ntfs/download/ --maximum-deltas 0 --release-notes-url-prefix https://github.com/bluecoral-vn/yuzu-ntfs/releases/tag/v --link https://github.com/bluecoral-vn/yuzu-ntfs/releases/tag/v0.1.1-beta -o "$OUT/appcast.xml" "$FEED"
+"$TOOLS/bin/generate_appcast" --account yuzu-ntfs --download-url-prefix https://yuzu.today/ntfs/download/ --maximum-deltas 0 --release-notes-url-prefix https://github.com/bluecoral-vn/yuzu-ntfs/releases/tag/v --link "https://github.com/bluecoral-vn/yuzu-ntfs/releases/tag/v$VERSION-beta" -o "$OUT/appcast.xml" "$FEED"
 if [[ "${YUZU_QA_RELEASE:-0}" != 1 ]]; then
   OFFICIAL=/Users/rom/Projects/yuzu-apps/Official
   mkdir -p "$OFFICIAL"
