@@ -11,6 +11,12 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
     private struct CheckContext: @unchecked Sendable {
         let resource: FSBlockDeviceResource?
         let volume: YuzuNTFSVolume?
+        func validate() throws {
+            guard let resource, !resource.isRevoked else { throw POSIXError(.ENODEV) }
+            _ = try YuzuNTFSGeometry(blockSize: resource.blockSize, blockCount: resource.blockCount,
+                                    physicalBlockSize: resource.physicalBlockSize)
+            try volume?.withUnactivatedResource {}
+        }
         func verify() throws {
             guard let resource else { throw POSIXError(.ENODEV) }
             let check = {
@@ -82,8 +88,8 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
 extension YuzuNTFSFileSystem: FSManageableResourceMaintenanceOperations {
     func startCheck(task: FSTask, options: FSTaskOptions) throws -> Progress {
         let context = resourceLock.withLock { CheckContext(resource: lastResource, volume: lastVolume) }
-        task.logMessage("Checking NTFS boot/MFT and clean state, read-only. Repair options are not supported; no repairs will be performed.")
-        return YuzuNTFSMaintenance.start(check: {
+        return try YuzuNTFSMaintenance.start(validate: context.validate, check: {
+            task.logMessage("Checking NTFS boot/MFT and clean state, read-only. Repair options are not supported; no repairs will be performed.")
             do { try context.verify(); task.logMessage("Read-only NTFS check passed."); return nil }
             catch { task.logMessage(error.localizedDescription); return error }
         }, completion: { _, failure in task.didComplete(error: failure) })

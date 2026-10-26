@@ -4,37 +4,57 @@ import Foundation
 import Testing
 import NTFSBridge
 import EngineE2
+import FSKit
+import ObjectiveC
 @testable import FSKitGlue
 
 private final class MaintenanceObservation: @unchecked Sendable {
     let lock = NSLock()
     var calls = 0
+    let startingThread = Thread.current
+    var callsOnStartingThread = 0
     var sawFinishedProgress = false
     var error: (any Error)?
     let completed = DispatchSemaphore(value: 0)
     func finish(_ progress: Progress, _ error: (any Error)?) {
-        lock.withLock { calls += 1; sawFinishedProgress = progress.isFinished; self.error = error }
+        lock.withLock {
+            calls += 1; sawFinishedProgress = progress.isFinished; self.error = error
+            if Thread.current == startingThread { callsOnStartingThread += 1 }
+        }
         completed.signal()
     }
 }
 
 struct MaintenanceTests {
-    @Test func progressIsReturnedUnfinishedAndCompletionIsScheduledExactlyOnce() {
-        let queue = DispatchQueue(label: "test.maintenance.ordering")
-        queue.suspend()
+    @Test func startupFailureReturnsNoProgressAndNeverCompletes() {
         let observation = MaintenanceObservation()
-        let progress = YuzuNTFSMaintenance.start(on: queue, check: { nil }, completion: observation.finish)
-        #expect(progress.totalUnitCount == 1)
-        #expect(progress.completedUnitCount == 0)
-        #expect(!progress.isFinished)
+        var progress: Progress?
+        #expect(throws: POSIXError.self) {
+            progress = try YuzuNTFSMaintenance.start(validate: { throw POSIXError(.ENODEV) },
+                check: { Issue.record("Check ran after a startup failure"); return nil }, completion: observation.finish)
+        }
+        #expect(progress == nil)
         #expect(observation.lock.withLock { observation.calls } == 0)
-        queue.resume()
-        #expect(observation.completed.wait(timeout: .now() + 3) == .success)
-        #expect(observation.lock.withLock { observation.calls == 1 && observation.sawFinishedProgress && observation.error == nil })
     }
-    @Test func failedCheckStillCompletesProgressAndTask() {
+    @Test func productionStartRejectsMissingResourceBeforeUsingTask() throws {
+        let filesystem = YuzuNTFSFileSystem()
+        // No task messages/completion are legal on this synchronous-throw path.
+        let task = class_createInstance(FSTask.self, 0) as! FSTask
+        let options = class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions
+        #expect(throws: POSIXError.self) { _ = try filesystem.startCheck(task: task, options: options) }
+    }
+    @Test func productionQueueCompletesExactlyOnceWithoutCallingThreadReentrancy() throws {
         let observation = MaintenanceObservation()
-        let progress = YuzuNTFSMaintenance.start(check: { POSIXError(.EROFS) }, completion: observation.finish)
+        let progress = try YuzuNTFSMaintenance.start(check: { nil }, completion: observation.finish)
+        #expect(progress.totalUnitCount == 1)
+        #expect(observation.completed.wait(timeout: .now() + 3) == .success)
+        #expect(observation.lock.withLock {
+            observation.calls == 1 && observation.sawFinishedProgress && observation.error == nil && observation.callsOnStartingThread == 0
+        })
+    }
+    @Test func failedCheckStillCompletesProgressAndTask() throws {
+        let observation = MaintenanceObservation()
+        let progress = try YuzuNTFSMaintenance.start(check: { POSIXError(.EROFS) }, completion: observation.finish)
         #expect(observation.completed.wait(timeout: .now() + 3) == .success)
         #expect(progress.isFinished)
         #expect(observation.lock.withLock { observation.calls == 1 && (observation.error as? POSIXError)?.code == .EROFS })

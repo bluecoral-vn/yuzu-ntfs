@@ -9,12 +9,17 @@ import EngineE2
 enum YuzuNTFSMaintenance {
     private static let queue = DispatchQueue(label: "com.bluecoral.vn.yuzuntfs.maintenance")
 
-    static func start(on queue: DispatchQueue = queue,
+    static func start(validate: () throws -> Void = {},
                       check: @escaping @Sendable () -> (any Error)?,
-                      completion: @escaping @Sendable (Progress, (any Error)?) -> Void) -> Progress {
+                      completion: @escaping @Sendable (Progress, (any Error)?) -> Void) throws -> Progress {
+        // B-R1: follow FSResource.h / FSTask.h, not an invented receipt handshake.
+        // Startup failures throw synchronously, with no Progress or didComplete.
+        // Otherwise enqueue work exactly as Apple's example does; never complete
+        // progress inline on the start-method stack. The public API has no
+        // "caller received Progress" callback, so async dispatch must not be
+        // misrepresented as a stronger cross-thread receipt guarantee.
+        try validate()
         let progress = Progress(totalUnitCount: 1)
-        // FSKit must receive an unfinished Progress and a later didComplete signal.
-        // Inline/pre-completed progress can wedge the check connector and Disk Arbitration.
         queue.async {
             let failure = progress.isCancelled ? POSIXError(.ECANCELED) : check()
             progress.completedUnitCount = 1
