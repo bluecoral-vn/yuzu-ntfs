@@ -42,7 +42,12 @@ final class YuzuNTFSFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
             let actual = try device.read(into: UnsafeMutableRawBufferPointer(start: buffer, count: count),
                                          startingAt: 0, length: count)
             guard actual >= 0, actual <= count else { throw POSIXError(.EIO) }
-            if NTFSBootSector.isBitLocker(UnsafeRawBufferPointer(start: buffer, count: actual)) {
+            if let kind = VolumeRejection.Kind.classify(bootSector: UnsafeRawBufferPointer(start: buffer, count: actual)) {
+                // Explanation only: bound to this attachment, never an NTFS identity or write grant.
+                if let directory = BetaPolicy.directory, let identity = DiskIdentity.read(device: device.bsdName),
+                   let rejection = VolumeRejection(kind: kind, identity: identity) {
+                    try? rejection.write(at: directory)
+                }
                 replyHandler(.notRecognized, nil)
                 return
             }

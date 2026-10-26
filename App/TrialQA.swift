@@ -43,7 +43,7 @@ import NTFSProbe
         let result: [String: Any] = ["id": command["id"] ?? "", "enabled": model.enabled, "acknowledged": model.acknowledged,
             "error": model.message ?? "", "drives": model.drives.map { drive -> [String: Any] in
                 ["device": drive.id, "name": drive.name, "mount": drive.mount ?? "", "writable": drive.writable,
-                 "allowed": model.isAllowed(drive), "reason": drive.status?.reason.rawValue ?? "unknown", "serial": drive.status.map { String(format: "%016llX", $0.serial) } ?? ""]
+                 "allowed": model.isAllowed(drive), "reason": drive.reason?.rawValue ?? "unknown", "serial": drive.status.map { String(format: "%016llX", $0.serial) } ?? ""]
             }]
         do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: directory.appendingPathComponent("result.json"), options: .atomic) }
         catch { model.message = error.localizedDescription }

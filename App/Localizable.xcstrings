@@ -161,18 +161,18 @@
         }
       }
     },
-    "BitLocker encryption is unsupported. Unlock and decrypt the drive in Windows; Yuzu cannot mount it.": {
+    "Encrypted with BitLocker — not supported. Unlock and decrypt the drive in Windows; Yuzu cannot mount or write it.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "BitLocker encryption is unsupported. Unlock and decrypt the drive in Windows; Yuzu cannot mount it."
+            "value": "Encrypted with BitLocker — not supported. Unlock and decrypt the drive in Windows; Yuzu cannot mount or write it."
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Không hỗ trợ mã hóa BitLocker. Hãy mở khóa và giải mã ổ trong Windows; Yuzu không thể gắn ổ này."
+            "value": "Ổ được mã hóa BitLocker — không được hỗ trợ. Hãy mở khóa và giải mã ổ trong Windows; Yuzu không thể gắn hay ghi vào ổ này."
           }
         }
       }

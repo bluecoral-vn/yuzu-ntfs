@@ -61,12 +61,14 @@ struct DriveCard: View {
                     .accessibilityLabel(drive.writable ? Text("Read and write") : Text("Read-only"))
             }
             if !drive.writable {
-                Text(TrialModel.explanation(drive.status?.reason ?? .requestedReadOnly)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Why read-only?") { model.selectedReason = drive.status?.reason ?? .requestedReadOnly }.font(.caption)
+                Text(TrialModel.explanation(drive.reason ?? .requestedReadOnly)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Why read-only?") { model.selectedReason = drive.reason ?? .requestedReadOnly }.font(.caption)
             }
-            Toggle("Allow writing (beta)", isOn: Binding(get: { model.isAllowed(drive) }, set: { value in Task { await model.setWriting(value, drive: drive) } }))
-                .disabled(model.busy || !model.acknowledged || drive.status == nil)
-                .help("Unmounts and remounts this drive. Close open files first. Unsafe drives stay read-only.")
+            if drive.rejection == nil {
+                Toggle("Allow writing (beta)", isOn: Binding(get: { model.isAllowed(drive) }, set: { value in Task { await model.setWriting(value, drive: drive) } }))
+                    .disabled(model.busy || !model.acknowledged || drive.status == nil)
+                    .help("Unmounts and remounts this drive. Close open files first. Unsafe drives stay read-only.")
+            }
             HStack {
                 Button("Open") { model.open(drive) }.disabled(drive.mount == nil)
                 Button("Eject") { Task { await model.eject(drive) } }.disabled(model.busy)

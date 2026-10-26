@@ -15,6 +15,8 @@ struct TrialDrive: Identifiable {
     var size: Int64
     var free: Int64
     var status: VolumeStatus?
+    var rejection: VolumeRejection?
+    var reason: ReadOnlyReason? { rejection?.reason ?? status?.reason }
     var writable: Bool
     var mountedWritable: Bool
 }
@@ -60,9 +62,13 @@ struct TrialDrive: Identifiable {
                 let info = try await SystemOperations.run("/usr/sbin/diskutil", ["info", "-plist", id])
                 guard let values = try PropertyListSerialization.propertyList(from: info.data, format: nil) as? [String: Any] else { continue }
                 let content = (values["Content"] as? String ?? "").lowercased()
-                guard let identity = operations?.identity(device: id),
-                      identity.isNTFS || (identity.fileSystem.isEmpty && content == "windows_ntfs") else { continue }
-                var status = VolumeStatus.read(for: identity, at: directory)
+                guard let identity = operations?.identity(device: id) else { continue }
+                var status: VolumeStatus?, rejection: VolumeRejection?
+                switch DriveClassification.classify(identity: identity, content: content, directory: directory) {
+                case .ignored: continue
+                case .rejected(let record): rejection = record
+                case .ntfs: status = VolumeStatus.read(for: identity, at: directory)
+                }
                 if !identity.deviceWritable, status?.reason.permitsWriteRemount == true {
                     status?.writable = false; status?.reason = .deviceReadOnly
                 }
@@ -71,8 +77,8 @@ struct TrialDrive: Identifiable {
                 let writable = mount != nil && actualYuzuRW && identity.deviceWritable && status?.writable == true
                 result.append(TrialDrive(id: id, identity: identity, name: values["VolumeName"] as? String ?? values["MediaName"] as? String ?? id, mount: mount,
                     size: (values["TotalSize"] as? NSNumber)?.int64Value ?? 0, free: ((values["FreeSpace"] ?? values["VolumeFreeSpace"]) as? NSNumber)?.int64Value ?? 0,
-                    status: status, writable: writable, mountedWritable: actualYuzuRW))
-                if let reason = status?.reason, Self.unsafe(reason), !notified.contains(identity) {
+                    status: status, rejection: rejection, writable: writable, mountedWritable: actualYuzuRW))
+                if let reason = rejection?.reason ?? status?.reason, Self.unsafe(reason), !notified.contains(identity) {
                     notified.insert(identity)
                     let content = UNMutableNotificationContent(); content.title = String(localized: "Drive is read-only")
                     content.body = Self.explanation(reason)
@@ -151,7 +157,7 @@ struct TrialDrive: Identifiable {
         case .deviceReadOnly: String(localized: "The device is write-protected. Check its physical lock or image permissions.")
         case .hibernated, .fastStartup: String(localized: "Windows left this drive hibernated or in Fast Startup. In Windows, shut down while holding Shift, or turn off Fast Startup. Never delete hiberfil.sys to force writing.")
         case .dirtyLog, .dirtyFlag: String(localized: "Windows marked this drive dirty. In Windows, run chkdsk /f on this drive, then safely eject it. Yuzu never repairs or clears the flag automatically.")
-        case .bitlocker: String(localized: "BitLocker encryption is unsupported. Unlock and decrypt the drive in Windows; Yuzu cannot mount it.")
+        case .bitlocker: String(localized: "Encrypted with BitLocker — not supported. Unlock and decrypt the drive in Windows; Yuzu cannot mount or write it.")
         case .unsupported: String(localized: "This NTFS format is unsupported. Use Windows to inspect the drive; there is no write override.")
         case .engineError: String(localized: "A filesystem error stopped new writes. Eject the drive and check it with chkdsk in Windows. Already-mapped data can still change until eject (beta limitation M-R1).")
         }
