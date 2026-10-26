@@ -56,6 +56,8 @@ namespace='http://www.andymatuschak.org/xml-namespaces/sparkle'
 ET.register_namespace('sparkle', namespace)
 tree=ET.parse(sys.argv[1])
 for item in tree.findall('./channel/item'):
+    if item.findtext('{'+namespace+'}shortVersionString') != sys.argv[2]:
+        continue
     tag='{'+namespace+'}releaseNotesLink'
     notes=item.find(tag)
     if notes is None:
