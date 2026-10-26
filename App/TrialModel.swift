@@ -115,8 +115,12 @@ struct TrialDrive: Identifiable {
             guard let directory, let status = drive.status, let operations else { throw POSIXError(.ENODEV) }
             guard !value || acknowledged else { throw POSIXError(.EPERM) }
             try BetaPolicy.setAllowed(value, serial: status.serial, at: directory)
+            let writable = value && status.reason.permitsWriteRemount
+            // Preserve the existing RO mount when safety/device state overrides opt-in.
+            // The extension still probes independently before any actual RW mount.
+            guard drive.writable != writable else { return }
             // A failed/busy unmount never force-unmounts. The preference remains for the next clean mount.
-            try await operations.perform(device: drive.id, action: "remount", allowWriting: value)
+            try await operations.perform(device: drive.id, action: "remount", allowWriting: writable)
         }
     }
     func eject(_ drive: TrialDrive) async { await execute { try await operations?.perform(device: drive.id, action: "eject") } }

@@ -4,6 +4,14 @@ import Testing
 @testable import NTFSProbe
 
 struct BetaPolicyTests {
+    @Test func unsafeReasonsNeverRequestWritableRemount() {
+        for reason: ReadOnlyReason in [.deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError] {
+            #expect(!reason.permitsWriteRemount)
+        }
+        for reason: ReadOnlyReason in [.writable, .acknowledgementRequired, .notAllowed, .requestedReadOnly] {
+            #expect(reason.permitsWriteRemount)
+        }
+    }
     @Test func admissionRequiresEveryGate() {
         let serial: UInt64 = 0x1234
         for ack in [false, true] {

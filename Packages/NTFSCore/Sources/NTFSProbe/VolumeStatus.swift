@@ -4,6 +4,13 @@ import Foundation
 public enum ReadOnlyReason: String, Codable, Sendable {
     case writable, acknowledgementRequired, notAllowed, requestedReadOnly, deviceReadOnly
     case hibernated, fastStartup, dirtyLog, dirtyFlag, bitlocker, unsupported, engineError
+    /// A saved opt-in is not permission to remount an unsafe/device-RO drive RW.
+    public var permitsWriteRemount: Bool {
+        switch self {
+        case .writable, .acknowledgementRequired, .notAllowed, .requestedReadOnly: true
+        case .deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError: false
+        }
+    }
 }
 
 public struct VolumeStatus: Codable, Equatable, Sendable {
