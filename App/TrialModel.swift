@@ -31,6 +31,25 @@ struct TrialDrive: Identifiable {
     private let operations = DriveOperations()
     private var refreshing = false
     private var monitor: Task<Void, Never>?
+    @ObservationIgnored lazy var updates = UpdateController(model: self)
+    func restoreModuleAfterUpdate() async {
+        let defaults = UserDefaults.standard
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        let previous = defaults.string(forKey: "LastLaunchedBuild")
+        let wasEnabled = defaults.bool(forKey: "UpdateModuleWasEnabled")
+        let active = UpdateController.mustWait()
+        if UpdateSafety.shouldReenable(previousBuild: previous, currentBuild: build, wasEnabled: wasEnabled,
+                                       moduleEnabled: enabled, activeVolumes: active) {
+            await setEnabled(true)
+        } else if previous != nil && previous != build && wasEnabled && !enabled && active {
+            message = String(localized: "Eject all FSKit drives, then enable Yuzu NTFS to finish updating the filesystem extension.")
+            return
+        }
+        if enabled || !wasEnabled {
+            defaults.set(build, forKey: "LastLaunchedBuild")
+            defaults.set(enabled, forKey: "UpdateModuleWasEnabled")
+        }
+    }
     func start() {
         guard monitor == nil else { return }
         let qa = TrialQA(arguments: ProcessInfo.processInfo.arguments)
@@ -171,7 +190,7 @@ struct TrialDrive: Identifiable {
             defer { try? FileManager.default.removeItem(at: temp) }
             let logs = try await SystemOperations.run("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate", "subsystem BEGINSWITH 'com.bluecoral.vn.yuzuntfs'"])
             try logs.data.write(to: temp.appendingPathComponent("unified-log.txt"))
-            let summary = "Yuzu NTFS 0.1.0 Beta (2)\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nEnabled: \(enabled)\n" + drives.map { "\($0.id) \($0.writable ? "RW" : "RO") \($0.status?.reason.rawValue ?? "unknown")" }.joined(separator: "\n")
+            let summary = "Yuzu NTFS \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") Beta (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nEnabled: \(enabled)\n" + drives.map { "\($0.id) \($0.writable ? "RW" : "RO") \($0.status?.reason.rawValue ?? "unknown")" }.joined(separator: "\n")
             try summary.write(to: temp.appendingPathComponent("status.txt"), atomically: true, encoding: .utf8)
             _ = try await SystemOperations.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", temp.path, destination.path])
         }

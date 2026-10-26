@@ -10,10 +10,15 @@ import NTFSProbe
         // LSUIElement apps do not automatically instantiate a SwiftUI Window scene.
         // Start observation independently of opening the menu or any window.
         model.start()
+        _ = model.updates
         Task {
             await model.refresh()
+            await model.restoreModuleAfterUpdate()
             if !model.acknowledged || !model.enabled { showOnboarding() }
         }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        model.updates.mayTerminate() ? .terminateNow : .terminateCancel
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { showOnboarding() }

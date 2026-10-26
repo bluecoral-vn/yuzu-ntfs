@@ -8,7 +8,7 @@ struct TrialMenu: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("Yuzu NTFS").font(.title3.bold()); Spacer(); Text("0.1.0 Beta").font(.caption).foregroundStyle(.secondary) }
+            HStack { Text("Yuzu NTFS").font(.title3.bold()); Spacer(); Text("0.1.1 Beta").font(.caption).foregroundStyle(.secondary) }
             if !model.enabled {
                 Button("Extension not enabled — Fix") { openWindow(id: "onboarding") }.buttonStyle(.borderedProminent)
             }
@@ -30,6 +30,8 @@ struct TrialMenu: View {
                 Button("Quit") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
             }
             Button("Export diagnostics…") { Task { await model.exportDiagnostics() } }.font(.caption)
+            Button("Check for Updates…") { model.updates.check() }
+            Button("Settings…") { openWindow(id: "settings") }
             Button("Disable Yuzu NTFS", role: .destructive) { Task { await model.setEnabled(false) } }.disabled(model.busy || !model.enabled)
             Text("Eject all FSKit drives before disabling. Quitting does not disable the extension.").font(.caption2).foregroundStyle(.secondary)
         }.padding(18).frame(width: 390)
@@ -87,7 +89,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 16) {
                 Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage()).resizable().frame(width: 72, height: 72)
-                VStack(alignment: .leading, spacing: 4) { Text("Welcome to Yuzu NTFS").font(.title.bold()); Text("0.1.0 Beta · Apple silicon · macOS 26+").foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 4) { Text("Welcome to Yuzu NTFS").font(.title.bold()); Text("0.1.1 Beta · Apple silicon · macOS 26+").foregroundStyle(.secondary) }
             }
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {

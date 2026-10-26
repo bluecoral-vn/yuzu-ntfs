@@ -24,5 +24,17 @@
 	<string>public.app-category.utilities</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://yuzu.today/ntfs/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>Xn34tDBWHQSFOu1+/uRuDEU9VSr3eLlCzgR6q8su8tc=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

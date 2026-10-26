@@ -14,5 +14,13 @@ struct YuzuNTFSApp: App {
         }.windowResizability(.contentSize)
         Window("About Yuzu NTFS", id: "about") { AboutView() }
             .windowResizability(.contentSize).defaultLaunchBehavior(.suppressed)
+        Window("Settings", id: "settings") {
+            VStack(alignment: .leading, spacing: 16) {
+                Toggle("Automatically check for updates", isOn: Binding(
+                    get: { model.updates.automaticallyChecks },
+                    set: { model.updates.automaticallyChecks = $0 }))
+                Button("Check for Updates…") { model.updates.check() }
+            }.padding(24).frame(width: 360)
+        }.windowResizability(.contentSize).defaultLaunchBehavior(.suppressed)
     }
 }

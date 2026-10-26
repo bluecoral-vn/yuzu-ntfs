@@ -1,6 +1,40 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Settings": {
+      "localizations": { "vi": { "stringUnit": { "state": "translated", "value": "Cài đặt" } } }
+    },
+    "Settings…": {
+      "localizations": { "vi": { "stringUnit": { "state": "translated", "value": "Cài đặt…" } } }
+    },
+    "Eject all Yuzu NTFS and other FSKit drives before quitting or updating.": {
+      "localizations": { "vi": { "stringUnit": { "state": "translated", "value": "Tháo an toàn tất cả ổ Yuzu NTFS và FSKit khác trước khi thoát hoặc cập nhật." } } }
+    },
+    "Eject all FSKit drives, then enable Yuzu NTFS to finish updating the filesystem extension.": {
+      "localizations": { "vi": { "stringUnit": { "state": "translated", "value": "Tháo an toàn tất cả ổ FSKit, sau đó bật Yuzu NTFS để hoàn tất cập nhật phần mở rộng hệ thống tập tin." } } }
+    },
+    "Check for Updates…": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Check for Updates…" } },
+        "vi": { "stringUnit": { "state": "translated", "value": "Kiểm tra bản cập nhật…" } }
+      }
+    },
+    "Automatically check for updates": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Automatically check for updates" } },
+        "vi": { "stringUnit": { "state": "translated", "value": "Tự động kiểm tra bản cập nhật" } }
+      }
+    },
+    "Eject drives before updating": {
+      "localizations": {
+        "vi": { "stringUnit": { "state": "translated", "value": "Tháo ổ đĩa trước khi cập nhật" } }
+      }
+    },
+    "Eject all Yuzu NTFS and other FSKit drives to install the update. Installation will resume automatically after ejecting.": {
+      "localizations": {
+        "vi": { "stringUnit": { "state": "translated", "value": "Tháo an toàn tất cả ổ Yuzu NTFS và FSKit khác để cài bản cập nhật. Quá trình cài đặt sẽ tự tiếp tục sau khi tháo ổ." } }
+      }
+    },
     "%@ free of %@": {
       "localizations": {
         "en": {
