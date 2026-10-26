@@ -8,6 +8,7 @@ import Sparkle
     private var pendingInstallation: (() -> Void)?
     private var watcher: Task<Void, Never>?
     private var waitingAlert: NSAlert?
+    private var updateReady = false
     private(set) var controller: SPUStandardUpdaterController!
     init(model: TrialModel) {
         self.model = model
@@ -74,11 +75,22 @@ import Sparkle
         }
         return true
     }
+    func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
+        updateReady = true
+    }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        updateReady = false
+        pendingInstallation = nil
+        watcher?.cancel()
+        waitingAlert?.window.close()
+        waitingAlert = nil
+    }
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
         UserDefaults.standard.set(model?.enabled == true, forKey: "UpdateModuleWasEnabled")
     }
     func mayTerminate() -> Bool {
         // Sparkle's on-quit install path must not bypass the same volume guard.
+        guard updateReady || pendingInstallation != nil else { return true }
         guard !Self.mustWait() else {
             model?.message = String(localized: "Eject all Yuzu NTFS and other FSKit drives before quitting or updating.")
             return false
