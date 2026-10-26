@@ -1,0 +1,902 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%@ free of %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ free of %@"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Còn trống %@ trên %@"
+          }
+        }
+      }
+    },
+    "0.1.0 Beta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta"
+          }
+        }
+      }
+    },
+    "0.1.0 Beta (2)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta (2)"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta (2)"
+          }
+        }
+      }
+    },
+    "0.1.0 Beta · Apple silicon · macOS 26+": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta · Apple silicon · macOS 26+"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0.1.0 Beta · Apple silicon · macOS 26+"
+          }
+        }
+      }
+    },
+    "A filesystem error stopped new writes. Eject the drive and check it with chkdsk in Windows. Already-mapped data can still change until eject (beta limitation M-R1).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A filesystem error stopped new writes. Eject the drive and check it with chkdsk in Windows. Already-mapped data can still change until eject (beta limitation M-R1)."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lỗi hệ thống tệp đã dừng các yêu cầu ghi mới. Tháo ổ đĩa rồi kiểm tra bằng chkdsk trong Windows. Dữ liệu đã được ánh xạ vẫn có thể thay đổi trước khi tháo ổ (giới hạn beta M-R1)."
+          }
+        }
+      }
+    },
+    "About": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giới thiệu"
+          }
+        }
+      }
+    },
+    "Accept the beta backup acknowledgement before allowing writing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accept the beta backup acknowledgement before allowing writing."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hãy xác nhận lưu ý sao lưu bản beta trước khi cho phép ghi."
+          }
+        }
+      }
+    },
+    "Allow writing (beta)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow writing (beta)"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cho phép ghi (beta)"
+          }
+        }
+      }
+    },
+    "Backup notice accepted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backup notice accepted"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã xác nhận lưu ý sao lưu"
+          }
+        }
+      }
+    },
+    "Beta — keep a backup of data you can't replace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beta — keep a backup of data you can't replace"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bản beta — hãy sao lưu dữ liệu không thể thay thế"
+          }
+        }
+      }
+    },
+    "BitLocker encryption is unsupported. Unlock and decrypt the drive in Windows; Yuzu cannot mount it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BitLocker encryption is unsupported. Unlock and decrypt the drive in Windows; Yuzu cannot mount it."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không hỗ trợ mã hóa BitLocker. Hãy mở khóa và giải mã ổ trong Windows; Yuzu không thể gắn ổ này."
+          }
+        }
+      }
+    },
+    "Disable Yuzu NTFS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable Yuzu NTFS"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tắt Yuzu NTFS"
+          }
+        }
+      }
+    },
+    "Done": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xong"
+          }
+        }
+      }
+    },
+    "Drive is read-only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drive is read-only"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ổ đĩa chỉ đọc"
+          }
+        }
+      }
+    },
+    "Eject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eject"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tháo ổ đĩa"
+          }
+        }
+      }
+    },
+    "Eject all FSKit drives before disabling. Quitting does not disable the extension.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eject all FSKit drives before disabling. Quitting does not disable the extension."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tháo tất cả ổ FSKit trước khi tắt. Thoát ứng dụng không tắt tiện ích hệ thống tệp."
+          }
+        }
+      }
+    },
+    "Eject all FSKit drives before enabling or disabling Yuzu NTFS.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eject all FSKit drives before enabling or disabling Yuzu NTFS."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tháo tất cả ổ FSKit trước khi bật hoặc tắt Yuzu NTFS."
+          }
+        }
+      }
+    },
+    "Enable Yuzu NTFS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Yuzu NTFS"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bật Yuzu NTFS"
+          }
+        }
+      }
+    },
+    "Enable the filesystem extension": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable the filesystem extension"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bật tiện ích hệ thống tệp"
+          }
+        }
+      }
+    },
+    "Export diagnostics…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export diagnostics…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xuất thông tin chẩn đoán…"
+          }
+        }
+      }
+    },
+    "Extension enabled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extension enabled"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tiện ích đã bật"
+          }
+        }
+      }
+    },
+    "Extension not enabled — Fix": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extension not enabled — Fix"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tiện ích chưa được bật — Thiết lập"
+          }
+        }
+      }
+    },
+    "Free and open source · GNU GPL version 2 only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free and open source · GNU GPL version 2 only"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Miễn phí và mã nguồn mở · Chỉ GNU GPL phiên bản 2"
+          }
+        }
+      }
+    },
+    "GitHub & GPL source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GitHub & GPL source"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GitHub và mã nguồn GPL"
+          }
+        }
+      }
+    },
+    "Help & report an issue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Help & report an issue"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trợ giúp và báo lỗi"
+          }
+        }
+      }
+    },
+    "I understand — I have a backup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I understand — I have a backup"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tôi hiểu — tôi đã sao lưu"
+          }
+        }
+      }
+    },
+    "No NTFS drives": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No NTFS drives"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chưa có ổ NTFS"
+          }
+        }
+      }
+    },
+    "No telemetry. Diagnostics are exported only when you choose. Updates are manual for this beta.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No telemetry. Diagnostics are exported only when you choose. Updates are manual for this beta."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thu thập dữ liệu sử dụng. Chỉ xuất chẩn đoán khi bạn yêu cầu. Bản beta này cần cập nhật thủ công."
+          }
+        }
+      }
+    },
+    "On macOS 26: System Settings → General → Login Items & Extensions → File System Extensions. If the toggle does not work, use Enable Yuzu NTFS above.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On macOS 26: System Settings → General → Login Items & Extensions → File System Extensions. If the toggle does not work, use Enable Yuzu NTFS above."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trên macOS 26: Cài đặt hệ thống → Cài đặt chung → Mục đăng nhập & Tiện ích → Tiện ích hệ thống tệp. Nếu công tắc không hoạt động, dùng nút Bật Yuzu NTFS ở trên."
+          }
+        }
+      }
+    },
+    "Open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở"
+          }
+        }
+      }
+    },
+    "Open System Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open System Settings"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở Cài đặt hệ thống"
+          }
+        }
+      }
+    },
+    "Plug in an NTFS drive. It starts read-only. In the menu bar, turn on Allow writing (beta) for each drive you trust. Hibernated or dirty drives always stay read-only.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plug in an NTFS drive. It starts read-only. In the menu bar, turn on Allow writing (beta) for each drive you trust. Hibernated or dirty drives always stay read-only."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối ổ NTFS. Ban đầu ổ chỉ đọc. Trong thanh menu, bật Cho phép ghi (beta) cho từng ổ bạn tin tưởng. Ổ đang ngủ đông hoặc có cờ lỗi luôn chỉ đọc."
+          }
+        }
+      }
+    },
+    "Plug in an NTFS drive. Writing is off until you opt in for that drive.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plug in an NTFS drive. Writing is off until you opt in for that drive."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối ổ NTFS. Chức năng ghi tắt cho đến khi bạn cho phép riêng cho ổ đó."
+          }
+        }
+      }
+    },
+    "Quit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thoát"
+          }
+        }
+      }
+    },
+    "Read and write": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read and write"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đọc và ghi"
+          }
+        }
+      }
+    },
+    "Read-only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read-only"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chỉ đọc"
+          }
+        }
+      }
+    },
+    "Report an issue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report an issue"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Báo lỗi"
+          }
+        }
+      }
+    },
+    "Review beta backup notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review beta backup notice"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xem lưu ý sao lưu bản beta"
+          }
+        }
+      }
+    },
+    "Set up": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thiết lập"
+          }
+        }
+      }
+    },
+    "Support via PayPal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Support via PayPal"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ủng hộ qua PayPal"
+          }
+        }
+      }
+    },
+    "Support via Wise": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Support via Wise"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ủng hộ qua Wise"
+          }
+        }
+      }
+    },
+    "The device is write-protected. Check its physical lock or image permissions.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The device is write-protected. Check its physical lock or image permissions."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thiết bị được bảo vệ chống ghi. Kiểm tra khóa vật lý hoặc quyền của tệp ảnh đĩa."
+          }
+        }
+      }
+    },
+    "The drive is busy. Close files and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The drive is busy. Close files and try again."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ổ đĩa đang bận. Đóng các tệp rồi thử lại."
+          }
+        }
+      }
+    },
+    "This NTFS format is unsupported. Use Windows to inspect the drive; there is no write override.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This NTFS format is unsupported. Use Windows to inspect the drive; there is no write override."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Định dạng NTFS này chưa được hỗ trợ. Dùng Windows để kiểm tra ổ; không có tùy chọn ép ghi."
+          }
+        }
+      }
+    },
+    "This drive was explicitly mounted read-only. Eject and reconnect it to apply your preference.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This drive was explicitly mounted read-only. Eject and reconnect it to apply your preference."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ổ này được gắn ở chế độ chỉ đọc. Tháo và kết nối lại để áp dụng tùy chọn của bạn."
+          }
+        }
+      }
+    },
+    "This is experimental filesystem software. Sparse, compressed and encrypted files are not writable. An error can stop new writes, but already-mapped data can still change until eject. Keep backups and safely eject every drive.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is experimental filesystem software. Sparse, compressed and encrypted files are not writable. An error can stop new writes, but already-mapped data can still change until eject. Keep backups and safely eject every drive."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đây là phần mềm hệ thống tệp thử nghiệm. Không ghi được tệp thưa, nén hoặc mã hóa. Khi có lỗi, yêu cầu ghi mới có thể bị dừng nhưng dữ liệu đã ánh xạ vẫn có thể thay đổi trước khi tháo ổ. Hãy sao lưu và tháo ổ an toàn."
+          }
+        }
+      }
+    },
+    "Unmounts and remounts this drive. Close open files first. Unsafe drives stay read-only.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmounts and remounts this drive. Close open files first. Unsafe drives stay read-only."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tháo và gắn lại ổ này. Hãy đóng tệp đang mở trước. Ổ không an toàn vẫn chỉ đọc."
+          }
+        }
+      }
+    },
+    "Welcome to Yuzu NTFS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome to Yuzu NTFS"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chào mừng đến với Yuzu NTFS"
+          }
+        }
+      }
+    },
+    "Why read-only?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Why read-only?"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vì sao chỉ đọc?"
+          }
+        }
+      }
+    },
+    "Windows left this drive hibernated or in Fast Startup. In Windows, shut down while holding Shift, or turn off Fast Startup. Never delete hiberfil.sys to force writing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows left this drive hibernated or in Fast Startup. In Windows, shut down while holding Shift, or turn off Fast Startup. Never delete hiberfil.sys to force writing."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows để ổ ở trạng thái ngủ đông hoặc Khởi động nhanh. Trong Windows, giữ Shift khi tắt máy hoặc tắt Khởi động nhanh. Không xóa hiberfil.sys để ép ghi."
+          }
+        }
+      }
+    },
+    "Windows marked this drive dirty. In Windows, run chkdsk /f on this drive, then safely eject it. Yuzu never repairs or clears the flag automatically.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows marked this drive dirty. In Windows, run chkdsk /f on this drive, then safely eject it. Yuzu never repairs or clears the flag automatically."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows đánh dấu ổ chưa sạch. Trong Windows, chạy chkdsk /f cho ổ này rồi tháo an toàn. Yuzu không tự sửa hay xóa cờ lỗi."
+          }
+        }
+      }
+    },
+    "Writing allowed (beta). Keep backups and eject before unplugging.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Writing allowed (beta). Keep backups and eject before unplugging."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã cho phép ghi (beta). Hãy sao lưu và tháo ổ trước khi rút cáp."
+          }
+        }
+      }
+    },
+    "Writing is off for this drive. Enable Allow writing (beta) to opt in.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Writing is off for this drive. Enable Allow writing (beta) to opt in."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chức năng ghi đang tắt cho ổ này. Bật Cho phép ghi (beta) để sử dụng."
+          }
+        }
+      }
+    },
+    "Yuzu NTFS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yuzu NTFS"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yuzu NTFS"
+          }
+        }
+      }
+    },
+    "Yuzu enables only its own module and keeps a backup of the system preference. Eject all FSKit drives first. No reboot or reduced security is required.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yuzu enables only its own module and keeps a backup of the system preference. Eject all FSKit drives first. No reboot or reduced security is required."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yuzu chỉ bật mô-đun của mình và sao lưu tùy chọn hệ thống. Trước tiên hãy tháo tất cả ổ FSKit. Không cần khởi động lại hoặc giảm bảo mật."
+          }
+        }
+      }
+    },
+    "yuzu.today": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yuzu.today"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yuzu.today"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

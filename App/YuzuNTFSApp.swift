@@ -4,15 +4,15 @@ import SwiftUI
 
 @main
 struct YuzuNTFSApp: App {
+    @State private var model = TrialModel()
     var body: some Scene {
-        MenuBarExtra("Yuzu NTFS", systemImage: "externaldrive") {
-            Text("Yuzu NTFS 0.1 Beta")
-            Button("Quit", action: quit)
-                .keyboardShortcut("q")
-        }
-    }
-
-    private func quit() {
-        NSApplication.shared.terminate(nil)
+        MenuBarExtra("Yuzu NTFS", systemImage: "externaldrive") { TrialMenu(model: model) }
+            .menuBarExtraStyle(.window)
+        Window("Yuzu NTFS — Set up", id: "onboarding") {
+            OnboardingView(model: model)
+                .task { model.start() }
+        }.windowResizability(.contentSize)
+        Window("About Yuzu NTFS", id: "about") { AboutView() }
+            .windowResizability(.contentSize).defaultLaunchBehavior(.suppressed)
     }
 }

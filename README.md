@@ -38,17 +38,25 @@ Or tell a friend who uses Windows drives on a Mac — one click shares it for yo
 | 🔒 **Keeps your Mac secure** | No kernel extension, no Recovery Mode, no lowering security settings, no restart. Uninstall by dragging the app to the Trash. |
 | ⚡ **Fast** | File data moves straight between the drive and macOS, so copies run close to the drive's own speed. |
 | 🪟 **Windows-friendly** | Names, folders, links and Mac file info are stored in ways Windows understands. No `._` clutter files. |
-| 🍋 **Lives in the menu bar** | *Coming in the next beta:* see every NTFS drive, why a drive is read-only and how to fix it, and eject in one click. |
+| 🍋 **Lives in the menu bar** | See each NTFS drive, free space, RW/RO status and read-only reasons; open, eject or opt in to writing per drive. |
+
+## Download
+
+Get the signed, notarized **Yuzu NTFS 0.1.0 Beta** DMG from [GitHub Releases](https://github.com/bluecoral-vn/yuzu-ntfs/releases). Requires **Apple silicon and macOS 26 or newer**. Drag **Yuzu NTFS.app** into Applications before opening it.
+
+This beta has **no automatic updater**. To update, eject all FSKit drives, quit the app, replace the app in Applications with the new download, then open it and check enablement again. See the [English release notes](docs/releases/0.1.0-beta.en.md) / [ghi chú tiếng Việt](docs/releases/0.1.0-beta.vi.md).
 
 ## How to use
 
-1. Open the app and turn on **Yuzu NTFS** when asked (one time only).
-2. Plug in your NTFS drive.
-3. Use it in Finder. When you're done, eject as usual.
+1. Open the app in Applications. Read and accept **“Beta — keep a backup of data you can't replace”** before enabling writes.
+2. With all FSKit drives ejected, click **Enable Yuzu NTFS**. This enables only Yuzu's module, keeps a timestamped settings backup and refreshes your user’s FSKit agent. **Open System Settings** is also available; onboarding includes macOS 26 instructions.
+3. Connect an NTFS drive. It starts **read-only**. Open the Yuzu NTFS menu to see its mode and reason.
+4. For a backed-up drive, turn on **Allow writing (beta)**. Close open files first: Yuzu unmounts and remounts that volume without sudo. Turning it off remounts read-only. Hibernated, Fast Startup, dirty or unsupported drives **stay read-only regardless**; follow the Windows-side instructions shown.
+5. Copy, rename and delete files in Finder. **Eject** before unplugging. To stop Yuzu entirely, eject all FSKit drives and choose **Disable Yuzu NTFS**. Quitting alone does not disable the extension.
 
-> **Beta note:** writing is still being tested. In this beta, drives open **read-only** so your files stay safe. Keep a backup of anything you can't replace.
+> **Beta warning:** keep backups. Sparse files are read-only; compressed and encrypted file contents are not writable. After an engine error, new writes are blocked, but data in already-mapped, already-allocated ranges can still change until eject (**M-R1**). macOS 26, physical SSD and Windows `chkdsk` acceptance remain pending; do not use the beta on irreplaceable data.
 
-**Good to know:** encrypted (BitLocker) drives and formatting disks as NTFS aren't supported. For a brand-new disk shared between Mac and Windows, exFAT is the simplest choice.
+**Good to know:** BitLocker-encrypted drives and formatting disks as NTFS are not supported. For a new shared Mac/Windows disk, exFAT is the simplest choice. The app has no telemetry; **Export diagnostics** creates a ZIP you review and send manually.
 
 ## Found a problem or have an idea?
 
