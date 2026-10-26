@@ -52,19 +52,7 @@ struct TrialDrive: Identifiable {
             let mounts = try await SystemOperations.run("/sbin/mount", [])
             let mountLines = String(decoding: mounts.data, as: UTF8.self).components(separatedBy: "\n")
             let list = try await SystemOperations.run("/usr/sbin/diskutil", ["list", "-plist"])
-            let tree = try PropertyListSerialization.propertyList(from: list.data, format: nil) as? [String: Any]
-            var candidates: [String] = []
-            func collect(_ nodes: [[String: Any]]) {
-                for node in nodes {
-                    let content = (node["Content"] as? String ?? "").lowercased()
-                    if content.contains("ntfs") || content == "microsoft basic data" || content == "windows_ntfs" {
-                        if let id = node["DeviceIdentifier"] as? String { candidates.append(id) }
-                    }
-                    collect(node["Partitions"] as? [[String: Any]] ?? [])
-                    collect(node["APFSVolumes"] as? [[String: Any]] ?? [])
-                }
-            }
-            collect(tree?["AllDisksAndPartitions"] as? [[String: Any]] ?? [])
+            let candidates = try NTFSInventory.candidateDevices(in: list.data)
             var result: [TrialDrive] = []
             for id in candidates {
                 let info = try await SystemOperations.run("/usr/sbin/diskutil", ["info", "-plist", id])

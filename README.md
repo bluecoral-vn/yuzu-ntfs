@@ -9,7 +9,7 @@ macOS 26+ · Apple silicon · <b>Beta 0.1</b></p>
 
 ---
 
-Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu NTFS adds full NTFS support to macOS, so the drive works in Finder like any other disk.
+Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu NTFS adds opt-in NTFS writing to macOS, so a backed-up, clean drive can be used in Finder.
 
 ## Love it? Help it grow 🍋
 

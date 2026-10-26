@@ -62,8 +62,10 @@ def drive(device, writable=None):
         time.sleep(1)
     raise RuntimeError('Drive/mode not listed: ' + device)
 
-def attach(image):
-    data = plistlib.loads(run('hdiutil', 'attach', '-plist', image))
+def attach(image, readonly=False):
+    arguments = ['hdiutil', 'attach', '-plist']
+    if readonly: arguments.append('-readonly')
+    data = plistlib.loads(run(*arguments, image))
     devices = [entry['dev-entry'] for entry in data['system-entities'] if entry.get('dev-entry', '').startswith('/dev/disk')]
     require(len(devices) == 1, 'Fixture must be partitionless')
     return devices[0].removeprefix('/dev/')
@@ -138,11 +140,14 @@ def main():
     (mount / 'trial-delete.txt').unlink()
     require((mount / 'trial-renamed.bin').read_bytes() == payload, 'Mounted copy mismatch')
     command('eject', device)
+    device = attach(image, readonly=True)
+    drive(device, False)
     extracted = run(ROOT / 'tools/bin/ntfscat', image, '/trial-renamed.bin')
     require(extracted == payload, 'Independent ntfscat byte mismatch')
     small = run(ROOT / 'tools/bin/ntfscat', image, '/trial-small.txt')
     require(small == b'Beta user flow\n', 'Small-file byte mismatch')
     print('PASS copy 1000003, small file, rename, delete, app eject, ntfscat bytes; SHA256=' + hashlib.sha256(payload).hexdigest(), flush=True)
+    command('eject', device)
     device = attach(image)
     drive(device, True)
     command('writing-off', device)
