@@ -22,6 +22,6 @@ for bundle in [app, *modules]:
     data = result.stdout
     if data:
         entitlements = plistlib.loads(data)
-        if entitlements.get('com.apple.security.get-task-allow'):
+        if any('get-task-allow' in key for key in entitlements):
             sys.exit(f'get-task-allow present: {bundle}')
 PY
