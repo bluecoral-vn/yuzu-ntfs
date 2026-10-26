@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 import Foundation
+import Darwin
 
 public enum ReadOnlyReason: String, Codable, Sendable {
     case writable, acknowledgementRequired, notAllowed, requestedReadOnly, deviceReadOnly
@@ -23,6 +24,7 @@ public enum ReadOnlyReason: String, Codable, Sendable {
 public struct VolumeStatus: Codable, Equatable, Sendable {
     public var serial: UInt64
     public var device: String
+    public let publisherID: UUID
     public let mediaUUID: UUID?
     public let appearedAt: Date
     public var updatedAt: Date
@@ -32,6 +34,7 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
     public var reason: ReadOnlyReason
     public init(serial: UInt64, identity: DiskIdentity, writable: Bool, reason: ReadOnlyReason, updatedAt: Date = Date()) {
         self.serial = serial; device = identity.device; mediaUUID = identity.mediaUUID
+        publisherID = UUID()
         appearedAt = identity.appearedAt; self.updatedAt = updatedAt; self.writable = writable; self.reason = reason
     }
     private static func fileName(device: String, volumeUUID: UUID) -> String {
@@ -48,16 +51,31 @@ public struct VolumeStatus: Codable, Equatable, Sendable {
         return status
     }
     public func remove(at directory: URL) throws {
-        let url = directory.appendingPathComponent(fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let current = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
-        guard current.device == device, current.serial == serial, current.mediaUUID == mediaUUID,
-              current.appearedAt == appearedAt else { return }
-        try FileManager.default.removeItem(at: url)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try withStatusLock(at: directory) {
+            let url = directory.appendingPathComponent(fileName)
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            let current = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+            guard current.publisherID == publisherID, current.device == device, current.serial == serial,
+                  current.mediaUUID == mediaUUID, current.appearedAt == appearedAt else { return }
+            try FileManager.default.removeItem(at: url)
+        }
     }
     public func write(at directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try JSONEncoder().encode(self).write(to: directory.appendingPathComponent(fileName), options: .atomic)
+        try withStatusLock(at: directory) {
+            try JSONEncoder().encode(self).write(to: directory.appendingPathComponent(fileName), options: .atomic)
+        }
+    }
+    private func withStatusLock<T>(at directory: URL, _ body: () throws -> T) throws -> T {
+        // Keep the lock inode stable: unlinking it could split concurrent writers.
+        let lock = directory.appendingPathComponent(".\(fileName).lock")
+        let descriptor = open(lock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try body()
     }
 }
 

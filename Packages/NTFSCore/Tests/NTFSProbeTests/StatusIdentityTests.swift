@@ -13,6 +13,21 @@ struct StatusIdentityTests {
             mediaUUID: media ?? self.media, appearedAt: appearance ?? self.appearance,
             fileSystem: kind, deviceWritable: true)
     }
+    @Test func lateUnloadDoesNotRemoveNewPublisherOnSameAttachment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let current = identity()
+        let old = VolumeStatus(serial: serial, identity: current, writable: true, reason: .writable,
+            updatedAt: appearance.addingTimeInterval(1))
+        let replacement = VolumeStatus(serial: serial, identity: current, writable: false, reason: .notAllowed,
+            updatedAt: appearance.addingTimeInterval(2))
+        try old.write(at: root)
+        try replacement.write(at: root)
+        try old.remove(at: root)
+        #expect(VolumeStatus.read(for: current, at: root) == replacement)
+        try replacement.remove(at: root)
+        #expect(VolumeStatus.read(for: current, at: root) == nil)
+    }
     @Test func bsdReuseAndNonNTFSNeverAdoptPreviousStatus() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
