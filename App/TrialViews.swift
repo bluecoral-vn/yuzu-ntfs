@@ -20,7 +20,7 @@ struct TrialMenu: View {
                 VStack(spacing: 12) {
                     ForEach(model.drives) { drive in DriveCard(model: model, drive: drive) }
                 }
-            }.frame(maxHeight: 380)
+            }.frame(height: model.drives.isEmpty ? 0 : min(380, CGFloat(model.drives.count) * 250))
             if let message = model.message { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
             Divider()
             HStack {

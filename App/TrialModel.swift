@@ -87,7 +87,7 @@ struct TrialDrive: Identifiable {
         await execute {
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
             try BetaPolicy.recordAcknowledgement(at: directory)
-            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
+            Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) }
         }
     }
     func setEnabled(_ value: Bool) async {
