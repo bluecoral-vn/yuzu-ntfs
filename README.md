@@ -42,7 +42,11 @@ Or tell a friend who uses Windows drives on a Mac — one click shares it for yo
 
 ## Download
 
-Get the signed, notarized **Yuzu NTFS 0.1.0 Beta** DMG from [GitHub Releases](https://github.com/bluecoral-vn/yuzu-ntfs/releases). Requires **Apple silicon and macOS 26 or newer**. Drag **Yuzu NTFS.app** into Applications before opening it.
+<p>
+  <a href="https://github.com/bluecoral-vn/yuzu-ntfs/releases/download/v0.1.0-beta/YuzuNTFS-0.1.0-beta.dmg"><img src="https://img.shields.io/badge/Download-Yuzu%20NTFS%200.1.0%20Beta-FFC93C?style=for-the-badge&logo=apple&logoColor=163300" alt="Download Yuzu NTFS 0.1.0 Beta"></a>
+</p>
+
+Signed and notarized by Apple · **Apple silicon, macOS 26 or newer** · [all releases](https://github.com/bluecoral-vn/yuzu-ntfs/releases). Open the DMG and drag **Yuzu NTFS.app** into Applications before opening it.
 
 This beta has **no automatic updater**. To update, eject all FSKit drives, quit the app, replace the app in Applications with the new download, then open it and check enablement again. See the [English release notes](docs/releases/0.1.0-beta.en.md) / [ghi chú tiếng Việt](docs/releases/0.1.0-beta.vi.md).
 
