@@ -106,13 +106,16 @@ struct TrialDrive: Identifiable {
         await execute {
             try await SystemOperations.setEnabled(value)
             let deadline = ContinuousClock.now + .seconds(30)
+            var lastError: (any Error)?
             while ContinuousClock.now < deadline {
-                let installed = try await FSClient.shared.installedExtensions
-                let actual = installed.contains { $0.bundleIdentifier == ModuleSettings.identifier && $0.isEnabled }
-                if actual == value { return }
+                do {
+                    let installed = try await FSClient.shared.installedExtensions
+                    let actual = installed.contains { $0.bundleIdentifier == ModuleSettings.identifier && $0.isEnabled }
+                    if actual == value { return }
+                } catch { lastError = error }
                 try await Task.sleep(for: .seconds(1))
             }
-            throw POSIXError(.ETIMEDOUT)
+            throw lastError ?? POSIXError(.ETIMEDOUT)
         }
     }
     func isAllowed(_ drive: TrialDrive) -> Bool {

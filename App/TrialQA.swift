@@ -30,7 +30,10 @@ import NTFSProbe
         case "menu", "onboarding":
             let content: AnyView = command["action"] == "menu" ? AnyView(TrialMenu(model: model)) : AnyView(OnboardingView(model: model))
             window?.close()
-            let created = NSWindow(contentViewController: NSHostingController(rootView: content))
+            let hosting = NSHostingController(rootView: content)
+            let created = NSWindow(contentViewController: hosting)
+            created.setContentSize(hosting.view.fittingSize)
+            created.isReleasedWhenClosed = false
             created.title = "Yuzu NTFS"; created.styleMask = [.titled, .closable]; created.center(); created.makeKeyAndOrderFront(nil)
             NSApplication.shared.activate(ignoringOtherApps: true); window = created
         case "status": break

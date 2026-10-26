@@ -23,7 +23,9 @@ import NTFSProbe
         if let onboardingWindow { onboardingWindow.makeKeyAndOrderFront(nil) }
         else {
             let view = OnboardingView(model: model, done: { [weak self] in self?.onboardingWindow?.close() })
-            let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+            let hosting = NSHostingController(rootView: view)
+            let window = NSWindow(contentViewController: hosting)
+            window.setContentSize(hosting.view.fittingSize)
             window.title = String(localized: "Welcome to Yuzu NTFS")
             window.styleMask = [.titled, .closable]; window.isReleasedWhenClosed = false
             window.center(); window.makeKeyAndOrderFront(nil)
