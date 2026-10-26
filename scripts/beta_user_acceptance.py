@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import time
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / 'build/p0-guest'
 CONTROL = WORK / 'control'
 APP = Path('/Applications/Yuzu NTFS.app')
+GROUP = Path.home() / 'Library/Group Containers/37PX6W22C5.com.bluecoral.vn.yuzuntfs/Library/Application Support/YuzuNTFS'
 
 def run(*args, timeout=90):
     print('+', *map(str, args), flush=True)
@@ -25,7 +27,7 @@ def require(condition, message):
     if not condition:
         raise RuntimeError(message)
 
-def command(action, device=None, timeout=60):
+def command(action, device=None, timeout=60, allow_error=False):
     request = {'id': str(uuid.uuid4()), 'action': action}
     if device: request['device'] = device
     temporary = CONTROL / 'pending.json'
@@ -37,12 +39,27 @@ def command(action, device=None, timeout=60):
             result = json.loads((CONTROL / 'result.json').read_text())
             if result['id'] == request['id']:
                 print(json.dumps(result, sort_keys=True), flush=True)
-                require(not result['error'], result['error'])
+                require(allow_error or not result['error'], result['error'])
                 return result
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         time.sleep(.5)
     raise RuntimeError('App command timed out: ' + action)
+
+def status_record(device, serial, directory=GROUP):
+    matches = []
+    for path in directory.glob(f'status-{device}-*.json'):
+        raw = path.read_bytes()
+        if json.loads(raw).get('serial') == int(serial, 16):
+            matches.append((path, raw))
+    require(len(matches) == 1, 'Missing or ambiguous published status: ' + device)
+    return matches[0]
+
+def require_status_removed(path, timeout=10):
+    deadline = time.monotonic() + timeout
+    while path.exists() and time.monotonic() < deadline:
+        time.sleep(.1)
+    require(not path.exists(), 'Unload left its published status: ' + str(path))
 
 def checkpoint(name):
     (ROOT / 'build/checkpoint').write_text(name)
@@ -80,6 +97,7 @@ def main():
     require(run('sysctl', '-n', 'kern.hv_vmm_present').strip() == b'1', 'VM only')
     WORK.mkdir(parents=True, exist_ok=True); CONTROL.mkdir(exist_ok=True)
     image = WORK / 'trial.img'; shutil.copyfile(ROOT / 'fixtures/basic-512.img', image)
+    protected = WORK / 'protected.img'; shutil.copyfile(ROOT / 'fixtures/c64k.img', protected)
     dirty = WORK / 'dirty.img'; shutil.copyfile(ROOT / 'fixtures/basic-512.img', dirty)
     # Offline fixture-only NTFS $Volume dirty flag. Change the serial to distinguish the two drives.
     with dirty.open('r+b') as stream:
@@ -114,6 +132,12 @@ def main():
     command('onboarding'); checkpoint('onboarding-en')
     enabled = command('enable'); require(enabled['enabled'], 'App enable failed')
     print('PASS install, first run, app enable', flush=True)
+    protected_device = attach(protected, readonly=True)
+    protected_state = drive(protected_device, False)
+    require(protected_state['reason'] == 'deviceReadOnly', 'Physical RO must precede missing acknowledgement')
+    protected_status, _ = status_record(protected_device, protected_state['serial'])
+    command('eject', protected_device); require_status_removed(protected_status)
+    print('PASS physical RO reason precedes acknowledgement, unload withdraws status', flush=True)
     device = attach(image)
     readonly = drive(device, False)
     require(readonly['reason'] == 'acknowledgementRequired', 'Initial RO reason missing')
@@ -123,12 +147,21 @@ def main():
     writable = drive(device, True)
     mount = Path(writable['mount']); require(mount.is_dir(), 'RW mount absent')
     print('PASS initially RO, beta acknowledgement, per-drive toggle remount RW', flush=True)
+    protected_device = attach(protected, readonly=True)
+    protected_state = drive(protected_device, False)
+    require(protected_state['reason'] == 'deviceReadOnly', 'Physical RO must precede missing allowlist preference')
+    protected_status, protected_raw = status_record(protected_device, protected_state['serial'])
+    command('writing-on', protected_device)
+    protected_after = drive(protected_device, False)
+    require(protected_after['reason'] == 'deviceReadOnly' and protected_after['allowed']
+            and protected_after['mount'] == protected_state['mount'], 'Opt-in disturbed a physically RO mount')
+    _, protected_after_raw = status_record(protected_device, protected_after['serial'])
+    require(json.loads(protected_after_raw)['publisherID'] == json.loads(protected_raw)['publisherID'], 'Physically RO opt-in reloaded the volume')
+    command('eject', protected_device); require_status_removed(protected_status)
+    print('PASS physical RO opt-in retained its existing mount and publisher', flush=True)
     # The common enable/disable guard is exercised with a real active FSKit volume.
-    blocked_request = {'id': str(uuid.uuid4()), 'action': 'disable'}
-    (CONTROL / 'command.json').write_text(json.dumps(blocked_request))
-    time.sleep(5)
-    blocked = json.loads((CONTROL / 'result.json').read_text())
-    require(blocked['id'] == blocked_request['id'] and blocked['error'] and blocked['enabled'], 'Disable must refuse an active FSKit mount')
+    blocked = command('disable', allow_error=True)
+    require(blocked['error'] and blocked['enabled'], 'Disable must refuse an active FSKit mount')
     # A status action retains the UI's previous error until the next real action; writing-on clears it.
     command('writing-on', device)
     payload = bytes((index * 17 + 31) % 256 for index in range(1000003))
@@ -139,7 +172,27 @@ def main():
     (mount / 'trial-delete.txt').write_bytes(b'delete me')
     (mount / 'trial-delete.txt').unlink()
     require((mount / 'trial-renamed.bin').read_bytes() == payload, 'Mounted copy mismatch')
+    hook = GROUP / 'force-read-only'
+    require(not hook.exists(), 'Unexpected pre-existing force-RO hook')
+    try:
+        hook.write_bytes(b'QA permission reduction only\\n')
+        try:
+            (mount / ('missing-' + str(uuid.uuid4()))).stat()
+        except FileNotFoundError:
+            pass
+        failed = drive(device, False)
+        require(failed['reason'] == 'engineError' and failed['mount'] == str(mount), 'RO latch failed to update live UI status')
+        _, failed_raw = status_record(device, failed['serial'])
+        require(not json.loads(failed_raw)['writable'], 'Extension retained a writable persisted status after the latch')
+    finally:
+        hook.unlink(missing_ok=True)
+    command('writing-off', device); drive(device, False)
+    command('writing-on', device); writable = drive(device, True)
+    mount = Path(writable['mount'])
+    print('PASS forced terminal RO publishes engineError/RO badge; off/on unmount/remount recovers', flush=True)
+    clean_status_path, _ = status_record(device, writable['serial'])
     command('eject', device)
+    require_status_removed(clean_status_path)
     device = attach(image, readonly=True)
     drive(device, False)
     extracted = run(ROOT / 'tools/bin/ntfscat', image, '/trial-renamed.bin')
@@ -147,7 +200,9 @@ def main():
     small = run(ROOT / 'tools/bin/ntfscat', image, '/trial-small.txt')
     require(small == b'Beta user flow\n', 'Small-file byte mismatch')
     print('PASS copy 1000003, small file, rename, delete, app eject, ntfscat bytes; SHA256=' + hashlib.sha256(payload).hexdigest(), flush=True)
+    clean_status_path, _ = status_record(device, writable['serial'])
     command('eject', device)
+    require_status_removed(clean_status_path)
     device = attach(image)
     drive(device, True)
     command('writing-off', device)
@@ -169,7 +224,33 @@ def main():
     time.sleep(2)
     start('vi'); command('onboarding'); checkpoint('onboarding-vi')
     command('menu'); checkpoint('menu-vi')
+    clean_status_path, clean_status_raw = status_record(device, readonly['serial'])
+    dirty_status_path, _ = status_record(unsafe_device, unsafe['serial'])
     command('eject', unsafe_device); command('eject', device)
+    require_status_removed(dirty_status_path); require_status_removed(clean_status_path)
+    # Simulate crash leftovers for a reused Microsoft Basic Data BSD partition.
+    exfat = WORK / 'reused-exfat.dmg'
+    run('hdiutil', 'create', '-size', '512m', '-layout', 'GPTSPUD', '-fs', 'ExFAT', '-volname', 'Beta-exFAT', exfat)
+    entities = plistlib.loads(run('hdiutil', 'attach', '-plist', exfat))['system-entities']
+    exfat_entry = next(entry for entry in entities if Path(entry.get('mount-point', '/')).name == 'Beta-exFAT')
+    exfat_device = exfat_entry['dev-entry'].removeprefix('/dev/')
+    whole = next(entry['dev-entry'] for entry in entities if re.fullmatch(r'/dev/disk[0-9]+', entry.get('dev-entry', '')))
+    stale = json.loads(clean_status_raw); stale['device'] = exfat_device
+    scoped_stale = GROUP / ('status-' + exfat_device + '-' + clean_status_path.name.removeprefix('status-' + device + '-'))
+    legacy_stale = GROUP / ('status-' + exfat_device + '.json')
+    before_policy = (GROUP / 'write-serials.txt').read_bytes()
+    try:
+        scoped_stale.write_text(json.dumps(stale)); legacy_stale.write_text(json.dumps(stale))
+        require(not any(item['device'] == exfat_device for item in command('status')['drives']), 'Stale NTFS state classified exFAT as NTFS')
+        rejected = command('writing-on', exfat_device, allow_error=True)
+        require(rejected['error'] == 'QA drive not found', 'A stale NTFS control was actionable for exFAT')
+        require((GROUP / 'write-serials.txt').read_bytes() == before_policy, 'Rejected exFAT action changed NTFS policy')
+        info = plistlib.loads(run('diskutil', 'info', '-plist', exfat_device))
+        require(info.get('FilesystemType') == 'exfat', 'Rejected action changed exFAT filesystem/mount')
+    finally:
+        scoped_stale.unlink(missing_ok=True); legacy_stale.unlink(missing_ok=True)
+        run('hdiutil', 'detach', whole)
+    print('PASS reused-BSD exFAT ignores scoped and legacy stale status; no writing control/policy change', flush=True)
     result = command('disable'); require(not result['enabled'], 'App disable failed')
     print('PASS Disable Yuzu NTFS after eject', flush=True)
     (ROOT / 'build/user-flow-pass.json').write_text(json.dumps({'passed': True, 'payloadBytes':len(payload), 'sha256':hashlib.sha256(payload).hexdigest()}, indent=2))

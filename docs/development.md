@@ -25,6 +25,8 @@ All first transitions into the terminal read-only latch publish `writable=false`
 
 For isolated guest UI acceptance only, launch the installed app with `--qa-control <directory>`. The flag is ignored outside a VM (`kern.hv_vmm_present != 1`). JSON `command.json` actions (`status`, `ack`, `enable`, `disable`, `writing-on`/`writing-off`/`eject` with `device`, `menu`, `onboarding`) call the exact UI model actions and atomically return `result.json` with the request `id`. This is no alternate write-admission path. Do not run RW acceptance on the host. Diagnostic export is user-initiated; logs may contain disk/path details. Updates are manual; Sparkle is not linked.
 
+`scripts/beta_user_acceptance.py`, run under the privileged `p0_vm_monitor.py` in a fresh disposable guest, adds physical-RO precedence/opt-in checks using `c64k.img`, forced-latch live-status checks, real unload withdrawal, and a GPT Microsoft Basic Data exFAT partition with simulated scoped/legacy crash leftovers. Negative QA assertions explicitly request the actual error response; ordinary commands still fail on any error. Its headless helper regressions are `python3 scripts/test-beta-user-acceptance.py`. Neither that harness nor its QA flag bypasses production admission.
+
 ## Build
 
 Requirements: Xcode 27.1 (tested host toolchain), XcodeGen, an arm64 Mac; Python 3 for the ntfsprogs source-integrity check and fixture acceptance checker. `project.yml` is the source of truth; the generated Xcode project is not committed.
@@ -35,7 +37,16 @@ xcodebuild -scheme YuzuNTFS -configuration Debug -derivedDataPath build build
 swift build --package-path Packages/NTFSCore
 ```
 
-After generating the offline fixtures below, run `swift test --package-path Packages/NTFSCore`; repeat with `--sanitize=address` and `--sanitize=undefined` for sanitizer checks. Missing fixture images fail with instructions to run `scripts/make-fixtures.sh`, rather than skipping coverage.
+After generating the offline fixtures below, run the full plain and ASan suites, then explicitly instrument C with UBSan and link its actual runtime:
+
+```sh
+swift test --package-path Packages/NTFSCore
+swift test --package-path Packages/NTFSCore --sanitize=address
+RUNTIME_DIR="$(xcrun clang --print-runtime-dir)"
+swift test --package-path Packages/NTFSCore -Xcc -fsanitize=undefined -Xlinker "$RUNTIME_DIR/libclang_rt.ubsan_osx_dynamic.dylib" -Xlinker -rpath -Xlinker "$RUNTIME_DIR"
+```
+
+Confirm the exercised test executable links `libclang_rt.ubsan_osx_dynamic.dylib` with `otool -L`; merely naming a sanitizer is not runtime-coverage evidence. Missing fixture images fail with instructions to run `scripts/make-fixtures.sh`, rather than skipping coverage.
 
 The result is `build/Build/Products/Debug/YuzuNTFS.app`, containing `Contents/Extensions/YuzuNTFSModule.appex`. Debug explicitly ad-hoc signs the module with its FSKit and sandbox entitlements: Xcode's normal signing path requires a provisioning profile even with identity `-`. This verifies packaging only, **not OS approval or extension loading**. `Release-Direct` uses manual Developer ID profiles, hardened runtime, and secure timestamps; run `scripts/setup-signing.sh` to register only this project's IDs and install profiles using an existing identity and the configured App Store Connect API key. No certificate or private key is created. No SIP/security changes are needed or recommended. See [R1 enablement findings](spikes/p0-r1-enable.md) for notarization, runtime evidence, owner-only Settings steps, and the unresolved macOS 26 gate.
 
