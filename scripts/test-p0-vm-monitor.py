@@ -62,7 +62,7 @@ class RecordedProcessStates(unittest.TestCase):
         self.assertFalse(monitor.observe('325 U other-daemon', 40)[0])
 
     def test_owned_args_workers_module_and_open_paths_require_persistence(self):
-        for command, paths in [('cp /owned/mount/a /tmp/a', {}), ('YuzuNTFSModule -BSServiceDomains', {}), ('/usr/libexec/fskitd', {}), ('python p0_guest_acceptance.py', {}), ('python vmrw_oracle.py', {}), ('mds_stores', {50: ['/owned/mount']})]:
+        for command, paths in [('cp /owned/mount/a /tmp/a', {}), ('YuzuNTFSModule -BSServiceDomains', {}), ('/usr/libexec/fskitd', {}), ('python p0_guest_acceptance.py', {}), ('python beta_user_acceptance.py', {}), ('python vmrw_oracle.py', {}), ('mds_stores', {50: ['/owned/mount']})]:
             with self.subTest(command=command):
                 monitor = UStateMonitor(['/owned/mount'])
                 for now in range(20):

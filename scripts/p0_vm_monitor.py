@@ -20,7 +20,7 @@ class UStateMonitor:
         return ('YuzuNTFSModule' in command
                 or '/com.apple.fskit.exfat.appex/Contents/MacOS/' in command
                 or Path(command.split()[0]).name == 'fskitd'
-                or any(name in command for name in ('p0_guest_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
+                or any(name in command for name in ('p0_guest_acceptance.py', 'beta_user_acceptance.py', 'vmrw_oracle.py', 'bench.sh', 'seqio'))
                 or any(path in command for path in self.owned_paths))
 
     def observe(self, text, now, open_paths=None, mounting_benchmark=False):
