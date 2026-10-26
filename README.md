@@ -17,11 +17,11 @@ Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu 
 |---|---|
 | 🔌 **Plug in and go** | NTFS drives mount automatically in Finder. No Terminal, no extra steps. |
 | ✏️ **Read and write** | Copy, save, rename and delete files on drives that come from Windows PCs. |
-| 🛡️ **Your data comes first** | If Windows didn't shut down cleanly (Fast Startup, hibernation) or the drive needs checking, it opens **read-only** and Yuzu NTFS tells you why and how to fix it. Nothing is changed behind your back. |
+| 🛡️ **Your data comes first** | If Windows didn't shut down cleanly (Fast Startup, hibernation) or the drive needs checking, it opens **read-only** instead of risking your files. Nothing is changed behind your back. |
 | 🔒 **Keeps your Mac secure** | No kernel extension, no Recovery Mode, no lowering security settings, no restart. Uninstall by dragging the app to the Trash. |
 | ⚡ **Fast** | File data moves straight between the drive and macOS, so copies run close to the drive's own speed. |
 | 🪟 **Windows-friendly** | Names, folders, links and Mac file info are stored in ways Windows understands. No `._` clutter files. |
-| 🍋 **Lives in the menu bar** | See every NTFS drive, whether it can be written, and eject it in one click. |
+| 🍋 **Lives in the menu bar** | *Coming in the next beta:* see every NTFS drive, why a drive is read-only and how to fix it, and eject in one click. |
 
 ## How to use
 
@@ -33,19 +33,39 @@ Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu 
 
 **Good to know:** encrypted (BitLocker) drives and formatting disks as NTFS aren't supported. For a brand-new disk shared between Mac and Windows, exFAT is the simplest choice.
 
+## Love it? Help it grow 🍋
+
+Yuzu NTFS is free. Your support keeps it updated for new macOS versions and funds new Yuzu apps.
+
+<p>
+  <a href="https://wise.com/pay/me/nguyenl447"><img src="https://img.shields.io/badge/Donate-via%20Wise-9FE870?style=for-the-badge&logo=wise&logoColor=163300" alt="Donate via Wise"></a>
+</p>
+
+Or tell a friend who uses Windows drives on a Mac — one click shares it for you:
+
+<p>
+  <a href="https://twitter.com/intent/tweet?text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at&url=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Share on X"></a>
+  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fyuzu.today"><img src="https://img.shields.io/badge/Share%20on-Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" alt="Share on Facebook"></a>
+  <a href="https://www.linkedin.com/feed/?shareActive=true&text=Yuzu%20NTFS%3A%20use%20Windows%20%28NTFS%29%20drives%20on%20your%20Mac%20%E2%80%94%20just%20plug%20in.%20Free%20%26%20open%20source.%20More%20small%20Mac%20apps%20at%20https%3A//yuzu.today"><img src="https://img.shields.io/badge/Share%20on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="Share on LinkedIn"></a>
+</p>
+
+## Found a problem or have an idea?
+
+[**Open an issue**](https://github.com/bluecoral-vn/yuzu-ntfs/issues/new/choose) and pick a form: 🐞 Bug report · 🚨 Data safety (files lost or damaged — we look at these first) · ✨ Feature request · 💬 Question.
+
 ## More from Yuzu Apps
 
 Small, private Mac apps from [**yuzu.today**](https://yuzu.today) — no account, no tracking.
 
-| App | What it does |
-|---|---|
-| [**Yuzu Drag**](https://yuzu.today/drag/) | Convert, compress and share files just by dragging them. |
-| [**Yuzu Clipboard**](https://yuzu.today/clipboard/) | Find anything you copied — text, links, images and files. |
-| [**Yuzu Shot**](https://yuzu.today/shot/) | Capture, annotate and save screenshots. |
-| [**Yuzu Awake**](https://yuzu.today/awake/) | Keep your Mac awake for as long as you need. |
-| [**Yuzu MagicMenu**](https://yuzu.today/magic-menu/) | New File, Move To and Copy To in Finder's right-click menu. |
-| [**Yuzu Sum**](https://yuzu.today/sum/) | A notepad calculator: answers appear as you type. *Coming soon.* |
-| [**Yuzu Sync**](https://yuzu.today/sync/) | Keep folders in sync across your Mac, external disks and NAS. *Coming soon.* |
+| | App | What it does |
+|:-:|---|---|
+| <img src="https://yuzu.today/assets/products/drag-128.webp" width="48" alt=""> | [**Yuzu Drag**](https://yuzu.today/drag/) | Convert, compress and share files just by dragging them. |
+| <img src="https://yuzu.today/assets/products/clipboard-128.webp" width="48" alt=""> | [**Yuzu Clipboard**](https://yuzu.today/clipboard/) | Find anything you copied — text, links, images and files. |
+| <img src="https://yuzu.today/assets/products/shot-128.webp" width="48" alt=""> | [**Yuzu Shot**](https://yuzu.today/shot/) | Capture, annotate and save screenshots. |
+| <img src="https://yuzu.today/assets/products/awake-128.webp" width="48" alt=""> | [**Yuzu Awake**](https://yuzu.today/awake/) | Keep your Mac awake for as long as you need. |
+| <img src="https://yuzu.today/assets/products/magic-menu-128.webp" width="48" alt=""> | [**Yuzu MagicMenu**](https://yuzu.today/magic-menu/) | New File, Move To and Copy To in Finder's right-click menu. |
+| <img src="https://yuzu.today/assets/products/sum-128.webp" width="48" alt=""> | [**Yuzu Sum**](https://yuzu.today/sum/) | A notepad calculator: answers appear as you type. *Coming soon.* |
+| <img src="https://yuzu.today/assets/products/sync-128.webp" width="48" alt=""> | [**Yuzu Sync**](https://yuzu.today/sync/) | Keep folders in sync across your Mac, external disks and NAS. *Coming soon.* |
 
 ---
 

@@ -1,0 +1,47 @@
+name: 🚨 Data safety
+description: Files were lost, damaged, or changed unexpectedly. We treat these first.
+labels: ["data safety", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry this happened. **Please stop writing to the drive** and eject it, so nothing gets overwritten. If you can, keep the drive as it is until we reply.
+  - type: textarea
+    id: what
+    attributes:
+      label: What was lost or changed?
+    validations:
+      required: true
+  - type: textarea
+    id: before
+    attributes:
+      label: What were you doing just before?
+      description: Copying, saving, renaming, ejecting, unplugging, sleep…
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Yuzu NTFS version
+      placeholder: 0.1.0 (1)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+    validations:
+      required: true
+  - type: input
+    id: drive
+    attributes:
+      label: Drive (brand/model, size, connection) and the Windows version that last used it
+  - type: dropdown
+    id: windows-check
+    attributes:
+      label: Did Windows "Check disk" (chkdsk) report problems afterwards?
+      options:
+        - Not tried
+        - No problems found
+        - Yes, it found and fixed problems
+        - Yes, but it couldn't fix them
