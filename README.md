@@ -17,6 +17,7 @@ Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu 
 
 <p>
   <a href="https://wise.com/pay/me/nguyenl447"><img src="https://img.shields.io/badge/Donate-via%20Wise-9FE870?style=for-the-badge&logo=wise&logoColor=163300" alt="Donate via Wise"></a>
+  <a href="https://paypal.me/nguyenrom"><img src="https://img.shields.io/badge/Donate-via%20PayPal-0070BA?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate via PayPal"></a>
 </p>
 
 Or tell a friend who uses Windows drives on a Mac — one click shares it for you:
