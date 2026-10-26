@@ -27,7 +27,15 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     }
     let api: nb_engine
     private var core: OpaquePointer?
-    private var terminalReadOnly = false
+    private var terminalReadOnly = false {
+        didSet {
+            if terminalReadOnly && !oldValue {
+                sharedStatus?.writable = false
+                sharedStatus?.reason = .engineError
+                publishStatus()
+            }
+        }
+    }
     private var checkpointTimer: DispatchSourceTimer?
     // Fault injection only reduces permissions; it cannot admit writes.
     var forceReadOnlyURL = (BetaPolicy.directory ?? FileManager.default.temporaryDirectory)
@@ -48,9 +56,6 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
         if FileManager.default.fileExists(atPath: forceReadOnlyURL.path) { terminalReadOnly = true }
         var state = nb_stat()
         if api.nb_statfs!(core, &state) != 0 || state.read_only != 0 { terminalReadOnly = true }
-        if terminalReadOnly, sharedStatus?.writable == true {
-            sharedStatus?.writable = false; sharedStatus?.reason = .engineError; publishStatus()
-        }
         return !terminalReadOnly
     }
     private let items = YuzuNTFSItemTable()

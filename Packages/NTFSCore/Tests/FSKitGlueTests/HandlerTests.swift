@@ -31,6 +31,11 @@ private final class HandlerCore {
     var directoryCookie: UInt64?
     private let checkpointLock = NSLock()
     private var checkpoints = 0
+    private var injectedCheckpointError: Int32 = 0
+    var checkpointError: Int32 {
+        get { checkpointLock.withLock { injectedCheckpointError } }
+        set { checkpointLock.withLock { injectedCheckpointError = newValue } }
+    }
     var checkpointCount: Int { checkpointLock.withLock { checkpoints } }
     func checkpoint() { checkpointLock.withLock { checkpoints += 1 } }
     static func state(_ pointer: OpaquePointer?) -> HandlerCore { Unmanaged<HandlerCore>.fromOpaque(UnsafeRawPointer(pointer!)).takeUnretainedValue() }
@@ -44,7 +49,11 @@ private final class HandlerCore {
         api.nb_root_ref = { _ in 5 }
         api.nb_hold = { core, _ in let s = HandlerCore.state(core); return s.failHold ? ENOMEM : s.failure }
         api.nb_release = { _, _ in 0 }
-        api.nb_sync = { core in let s = HandlerCore.state(core); s.checkpoint(); return s.failure }
+        api.nb_sync = { core in
+            let s = HandlerCore.state(core); s.checkpoint()
+            let error = s.checkpointError
+            return error == 0 ? s.failure : error
+        }
         api.nb_unmount = { core in HandlerCore.state(core).closes += 1; return 0 }
         api.nb_dispose = { core in HandlerCore.state(core).closes += 1; return 0 }
         api.nb_query_extents = { core, _, offset, length, buffer, capacity, count in
@@ -96,10 +105,16 @@ private final class HandlerCore {
         }
         return api
     }
-    func volume() throws -> YuzuNTFSVolume {
+    func volume(statusDirectory: URL? = nil) throws -> YuzuNTFSVolume {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let boot = try Data(contentsOf: repo.appendingPathComponent("fixtures/basic-512.img"), options: .mappedIfSafe).prefix(512).withUnsafeBytes { try NTFSBootSector.parse($0) }
-        return YuzuNTFSVolume(device: HandlerDevice(self), boot: boot, writable: true, api: api)
+        let status = statusDirectory.map { _ in
+            let identity = DiskIdentity(device: "disk9s1", volumeUUID: boot.volumeUUID, mediaUUID: nil,
+                appearedAt: Date(timeIntervalSinceReferenceDate: 1), fileSystem: "yuzuntfs", deviceWritable: true)
+            return VolumeStatus(serial: boot.serial, identity: identity, writable: true, reason: .writable)
+        }
+        return YuzuNTFSVolume(device: HandlerDevice(self), boot: boot, writable: true, api: api,
+            status: status, statusDirectory: statusDirectory)
     }
 }
 private final class ReplyOnce {
@@ -119,6 +134,60 @@ private final class ReplyOnce {
     let count = core.checkpointCount
     Thread.sleep(forTimeInterval: 0.1)
     #expect(core.checkpointCount == count)
+}
+
+private func publishedStatusURL(in directory: URL) throws -> URL {
+    try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        .first { $0.lastPathComponent.hasPrefix("status-") && $0.pathExtension == "json" })
+}
+
+@Test func checkpointFailurePublishesReadOnlyWithoutAnySubsequentVolumeOperation() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let core = HandlerCore(), volume = try core.volume(statusDirectory: directory)
+    volume.forceReadOnlyURL = directory.appendingPathComponent("unused-force-ro")
+    defer { volume.unmount {}; try? FileManager.default.removeItem(at: directory) }
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    volume.mount(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { error in #expect(error == nil) }
+    let file = try publishedStatusURL(in: directory)
+    #expect(try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: file)).writable)
+    core.checkpointError = EIO
+    let deadline = Date().addingTimeInterval(7)
+    var status = try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: file))
+    while status.writable && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.01)
+        status = try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: file))
+    }
+    #expect(core.checkpointCount > 0)
+    #expect(!status.writable && status.reason == .engineError)
+}
+
+@Test func forceHookPublishesReadOnlyBeforeEffectiveWritableEarlyReturn() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let core = HandlerCore(), volume = try core.volume(statusDirectory: directory)
+    volume.forceReadOnlyURL = directory.appendingPathComponent("force-ro")
+    defer { volume.unmount {}; try? FileManager.default.removeItem(at: directory) }
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    let file = try publishedStatusURL(in: directory)
+    try Data().write(to: volume.forceReadOnlyURL)
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: YuzuNTFSItem(ref: 42, parent: 5)) { _, error in #expect(error == nil) }
+    let status = try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: file))
+    #expect(!status.writable && status.reason == .engineError)
+    volume.withdrawStatus()
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    volume.getAttributes(FSItem.GetAttributesRequest(), of: YuzuNTFSItem(ref: 42, parent: 5)) { _, error in #expect(error == nil) }
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+}
+
+@Test func engineReadOnlyTransitionPublishesErrorAtFirstLatch() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let core = HandlerCore(), volume = try core.volume(statusDirectory: directory)
+    volume.forceReadOnlyURL = directory.appendingPathComponent("unused-force-ro")
+    defer { volume.unmount {}; try? FileManager.default.removeItem(at: directory) }
+    volume.activate(options: class_createInstance(FSTaskOptions.self, 0) as! FSTaskOptions) { _, error in #expect(error == nil) }
+    core.readOnly = true
+    volume.openItem(YuzuNTFSItem(ref: 42, parent: 5), modes: [.write]) { error in #expect((error as NSError?)?.code == Int(EROFS)) }
+    let status = try JSONDecoder().decode(VolumeStatus.self, from: Data(contentsOf: publishedStatusURL(in: directory)))
+    #expect(!status.writable && status.reason == .engineError)
 }
 
 @Test func effectiveReadOnlyRejectsWriteOpenAndInhibitsResidentPublication() throws {
