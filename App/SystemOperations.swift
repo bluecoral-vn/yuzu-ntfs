@@ -75,9 +75,12 @@ private func diskReply(_ disk: DADisk, _ dissenter: DADissenter?, _ context: Uns
         if action == "remount" {
             try await withCheckedThrowingContinuation { continuation in
                 let context = Unmanaged.passRetained(DiskOperation(continuation)).toOpaque()
-                var arguments: [CFString?] = [request.mountOption as CFString, nil]
-                arguments.withUnsafeMutableBufferPointer {
-                    DADiskMountWithArguments(disk, nil, DADiskMountOptions(kDADiskMountOptionDefault), diskReply, context, $0.baseAddress)
+                let option = request.mountOption as CFString
+                var arguments: [Unmanaged<CFString>?] = [.passUnretained(option), nil]
+                withExtendedLifetime(option) {
+                    arguments.withUnsafeMutableBufferPointer {
+                        DADiskMountWithArguments(disk, nil, DADiskMountOptions(kDADiskMountOptionDefault), diskReply, context, $0.baseAddress)
+                    }
                 }
             }
         } else if action == "eject" {
