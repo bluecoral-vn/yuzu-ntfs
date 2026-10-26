@@ -28,6 +28,9 @@ enum SystemOperations {
     }
     static func setEnabled(_ enabled: Bool) async throws {
         try await requireNoActiveVolumes()
+        if enabled {
+            _ = try await run("/usr/bin/pluginkit", ["-e", "use", "-i", ModuleSettings.identifier])
+        }
         try ModuleSettings.setEnabled(enabled, at: ModuleSettings.url)
         try await requireNoActiveVolumes()
         let result: CommandOutput

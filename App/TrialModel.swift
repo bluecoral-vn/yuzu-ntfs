@@ -65,7 +65,7 @@ struct TrialDrive: Identifiable {
                 let actualYuzuRW = mountLines.contains { $0.hasPrefix("/dev/\(id) on ") && $0.contains("(yuzuntfs,") && !$0.contains("read-only") }
                 let writable = mount != nil && actualYuzuRW && status?.writable == true
                 result.append(TrialDrive(id: id, name: values["VolumeName"] as? String ?? values["MediaName"] as? String ?? id, mount: mount,
-                    size: (values["TotalSize"] as? NSNumber)?.int64Value ?? 0, free: (values["VolumeFreeSpace"] as? NSNumber)?.int64Value ?? 0, status: status, writable: writable))
+                    size: (values["TotalSize"] as? NSNumber)?.int64Value ?? 0, free: ((values["FreeSpace"] ?? values["VolumeFreeSpace"]) as? NSNumber)?.int64Value ?? 0, status: status, writable: writable))
                 if let reason = status?.reason, Self.unsafe(reason), !notified.contains(id) {
                     notified.insert(id)
                     let content = UNMutableNotificationContent(); content.title = String(localized: "Drive is read-only")
