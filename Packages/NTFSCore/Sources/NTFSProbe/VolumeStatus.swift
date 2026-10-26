@@ -11,6 +11,13 @@ public enum ReadOnlyReason: String, Codable, Sendable {
         case .deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError: false
         }
     }
+    public static func forCleanDevice(writable: Bool, acknowledged: Bool, allowed: Bool, requestedReadOnly: Bool) -> Self {
+        if !writable { return .deviceReadOnly }
+        if !acknowledged { return .acknowledgementRequired }
+        if !allowed { return .notAllowed }
+        if requestedReadOnly { return .requestedReadOnly }
+        return .writable
+    }
 }
 
 public struct VolumeStatus: Codable, Equatable, Sendable {

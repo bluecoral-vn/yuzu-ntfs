@@ -77,11 +77,10 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
             case NB_BITLOCKER: reason = .bitlocker
             default: reason = .unsupported
             }
-        } else if !acknowledged { reason = .acknowledgementRequired }
-        else if !allowed { reason = .notAllowed }
-        else if readOnly { reason = .requestedReadOnly }
-        else if !device.isWritable { reason = .deviceReadOnly }
-        else { reason = .writable }
+        } else {
+            reason = .forCleanDevice(writable: device.isWritable, acknowledged: acknowledged,
+                                     allowed: allowed, requestedReadOnly: readOnly)
+        }
         self.init(device: adapter, boot: boot, writable: writable, api: api)
         sharedStatus = VolumeStatus(serial: boot.serial, device: device.bsdName, writable: writable, reason: reason)
         publishStatus()

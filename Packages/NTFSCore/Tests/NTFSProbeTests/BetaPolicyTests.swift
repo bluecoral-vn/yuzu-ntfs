@@ -4,6 +4,16 @@ import Testing
 @testable import NTFSProbe
 
 struct BetaPolicyTests {
+    @Test func physicalReadOnlyPrecedesEveryPreferenceReason() {
+        for acknowledged in [false, true] {
+            for allowed in [false, true] {
+                for requestedReadOnly in [false, true] {
+                    #expect(ReadOnlyReason.forCleanDevice(writable: false, acknowledged: acknowledged,
+                        allowed: allowed, requestedReadOnly: requestedReadOnly) == .deviceReadOnly)
+                }
+            }
+        }
+    }
     @Test func unsafeReasonsNeverRequestWritableRemount() {
         for reason: ReadOnlyReason in [.deviceReadOnly, .hibernated, .fastStartup, .dirtyLog, .dirtyFlag, .bitlocker, .unsupported, .engineError] {
             #expect(!reason.permitsWriteRemount)
