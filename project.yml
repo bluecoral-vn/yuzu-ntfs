@@ -18,7 +18,7 @@ settings:
     DEVELOPMENT_TEAM: 37PX6W22C5
     ENABLE_HARDENED_RUNTIME: YES
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "2"
     GENERATE_INFOPLIST_FILE: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
   configs:
@@ -38,9 +38,13 @@ targets:
   YuzuNTFS:
     type: application
     platform: macOS
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
     sources:
       - path: App
-        excludes: [Info.plist]
+        excludes: [Info.plist, YuzuNTFS.entitlements]
     info:
       path: App/Info.plist
       properties:
@@ -53,7 +57,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bluecoral.vn.yuzuntfs
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: App/YuzuNTFS.entitlements
       configs:
+        Debug:
+          CODE_SIGNING_ALLOWED: NO
         Release-Direct:
           PRODUCT_NAME: Yuzu NTFS
           PROVISIONING_PROFILE_SPECIFIER: Yuzu NTFS Developer ID
@@ -62,12 +69,28 @@ targets:
         script: '"$SRCROOT/scripts/p0-build-identity.sh"'
         inputFiles: ["$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"]
         basedOnDependencyAnalysis: false
+      - name: Ad-hoc sign Debug app
+        script: |
+          if [ "$CONFIGURATION" = Debug ]; then
+            /usr/bin/codesign --force --sign - \
+              --entitlements "$SRCROOT/App/YuzuNTFS.entitlements" \
+              "$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME"
+          fi
+        basedOnDependencyAnalysis: false
     dependencies:
       - target: YuzuNTFSModule
         embed: true
         codeSign: false
+      - package: NTFSCore
+        product: NTFSProbe
+      - sdk: FSKit.framework
+      - sdk: DiskArbitration.framework
   YuzuNTFSModule:
     type: extensionkit-extension
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
     platform: macOS
     sources:
       - path: Module

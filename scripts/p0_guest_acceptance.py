@@ -22,7 +22,7 @@ from p0_ops import ROOT, MODULE, SUPPORT, ALLOW, Runner, require, allowlist, emp
 from p0_vm_monitor import wait_for_owned_io
 
 RESIDENT_SHA = '4b2720d37f921134bfbb2deb27137d6f08fc55ced90f88c4971f5f42e06e1fc6'
-HOOK = SUPPORT / 'p0-force-ro'
+HOOK = SUPPORT / 'force-read-only'
 
 
 def digest(path):
@@ -50,6 +50,7 @@ def authorize(serial):
     current = allowlist(ALLOW.read_text()) if ALLOW.exists() else []
     require(not current, 'RW admission requires an otherwise empty allowlist')
     ALLOW.parent.mkdir(parents=True, exist_ok=True)
+    (ALLOW.parent / 'beta-ack').write_text('acknowledged-v1\n')
     ALLOW.write_text(serial + '\n')
 
 

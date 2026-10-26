@@ -128,12 +128,11 @@ if not module_capability_enabled():
     subprocess.run(["xcodegen", "generate"], cwd=root, check=True)
     result = subprocess.run(["xcodebuild", "-scheme", "YuzuNTFS", "-configuration", "Release-Direct",
         "-derivedDataPath", "build/signing-bootstrap", "-destination", "generic/platform=macOS",
-        "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=" + development[2], "PROVISIONING_PROFILE_SPECIFIER=",
+        "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development", "PROVISIONING_PROFILE_SPECIFIER=",
         "DEVELOPMENT_TEAM=" + team, "-allowProvisioningUpdates", "-authenticationKeyPath", str(key_path),
         "-authenticationKeyID", key_id, "-authenticationKeyIssuerID", issuer, "build"], cwd=root)
     if not module_capability_enabled():
-        raise SystemExit("Xcode provisioning did not enable FSKit Module. Enable it on App ID "
-                         "com.bluecoral.vn.yuzuntfs.fsmodule in the Developer portal, then rerun. "
+        raise SystemExit("Xcode provisioning did not enable FSKit Module. "
                          f"Xcode exit status: {result.returncode}")
     print("FSKIT_MODULE enabled by Xcode provisioning service; bootstrap exit", result.returncode)
 

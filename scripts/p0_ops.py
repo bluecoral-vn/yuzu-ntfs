@@ -22,8 +22,8 @@ TEAM = '37PX6W22C5'
 APP = Path('/Applications/Yuzu NTFS.app')
 APPEX = APP / 'Contents/Extensions/YuzuNTFSModule.appex'
 LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
-SUPPORT = Path.home() / 'Library/Containers' / MODULE / 'Data/Library/Application Support/YuzuNTFS'
-ALLOW = SUPPORT / 'p0-rw-serials.txt'
+SUPPORT = Path.home() / 'Library/Group Containers/37PX6W22C5.com.bluecoral.vn.yuzuntfs/Library/Application Support/YuzuNTFS'
+ALLOW = SUPPORT / 'write-serials.txt'
 SETTINGS = Path.home() / 'Library/Group Containers/group.com.apple.fskit.settings/enabledModules.plist'
 # Recorded staged-build timestamp in the already-wedged session (QCDeployOps).
 WEDGED_AT = datetime.datetime.fromisoformat('2026-10-24T18:28:20+07:00').timestamp()

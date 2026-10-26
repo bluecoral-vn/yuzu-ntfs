@@ -2,8 +2,8 @@
 import Foundation
 
 public enum WriteAllowlist {
-    public static let relativePath = "Library/Application Support/YuzuNTFS/p0-rw-serials.txt"
-    public static var fileURL: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(relativePath) }
+    public static let relativePath = "Library/Application Support/YuzuNTFS/write-serials.txt"
+    public static var fileURL: URL? { BetaPolicy.directory?.appendingPathComponent("write-serials.txt") }
     public static func permits(serial: UInt64, contents: String?) -> Bool {
         guard let contents else { return false }
         var found = false

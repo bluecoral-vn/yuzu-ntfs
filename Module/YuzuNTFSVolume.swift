@@ -29,25 +29,62 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
     private var core: OpaquePointer?
     private var terminalReadOnly = false
     private var checkpointTimer: DispatchSourceTimer?
-    // P0-only fault injection; remove in P1. No container escape or engine ABI change.
-    var forceReadOnlyURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("YuzuNTFS/p0-force-ro")
+    // Fault injection only reduces permissions; it cannot admit writes.
+    var forceReadOnlyURL = (BetaPolicy.directory ?? FileManager.default.temporaryDirectory)
+        .appendingPathComponent("force-read-only")
+    private var sharedStatus: VolumeStatus?
+    private func publishStatus() {
+        guard let directory = BetaPolicy.directory, let sharedStatus else { return }
+        do { try sharedStatus.write(at: directory) }
+        catch { Self.p0Log.error("Cannot publish volume status: \(error.localizedDescription)") }
+    }
     #if DEBUG
     var beforeSizeLock: (() -> Void)?
     #endif
     private func effectivelyWritable() -> Bool {
         guard writable, core != nil, !terminalReadOnly else { return false }
-        if FileManager.default.fileExists(atPath: forceReadOnlyURL.path) { terminalReadOnly = true; return false }
+        if FileManager.default.fileExists(atPath: forceReadOnlyURL.path) { terminalReadOnly = true }
         var state = nb_stat()
         if api.nb_statfs!(core, &state) != 0 || state.read_only != 0 { terminalReadOnly = true }
+        if terminalReadOnly, sharedStatus?.writable == true {
+            sharedStatus?.writable = false; sharedStatus?.reason = .engineError; publishStatus()
+        }
         return !terminalReadOnly
     }
     private let items = YuzuNTFSItemTable()
     private var rootRef: UInt64 = 5
     convenience init(device: FSBlockDeviceResource, boot: NTFSBootSector, readOnly: Bool = false) throws {
-        let writable = !readOnly && WriteAllowlist.permits(serial: boot.serial, contents: try? String(contentsOf: WriteAllowlist.fileURL, encoding: .utf8)) && device.isWritable
         let adapter = try YuzuNTFSDevice(device)
-        self.init(device: adapter, boot: boot, writable: writable, api: nb_engine_e2()!.pointee)
+        let api = nb_engine_e2()!.pointee
+        var dev = adapter.blockdev
+        var state = NB_UNSUPPORTED
+        let probeError = api.nb_probe_state!(&dev, &state)
+        let directory = BetaPolicy.directory
+        let acknowledged = BetaPolicy.acknowledged(at: directory)
+        let allowlist = directory.flatMap { try? String(contentsOf: $0.appendingPathComponent("write-serials.txt"), encoding: .utf8) }
+        let allowed = WriteAllowlist.permits(serial: boot.serial, contents: allowlist)
+        let clean = probeError == 0 && state == NB_CLEAN
+        let writable = !readOnly && device.isWritable && BetaPolicy.admits(serial: boot.serial,
+            acknowledgement: acknowledged ? BetaPolicy.acknowledgement : nil, allowlist: allowlist, clean: clean)
+        let reason: ReadOnlyReason
+        if probeError != 0 { reason = .engineError }
+        else if !clean {
+            switch state {
+            case NB_HIBERNATED: reason = .hibernated
+            case NB_FAST_STARTUP: reason = .fastStartup
+            case NB_DIRTY_LOG: reason = .dirtyLog
+            case NB_DIRTY_FLAG: reason = .dirtyFlag
+            case NB_BITLOCKER: reason = .bitlocker
+            default: reason = .unsupported
+            }
+        } else if readOnly { reason = .requestedReadOnly }
+        else if !device.isWritable { reason = .deviceReadOnly }
+        else if !acknowledged { reason = .acknowledgementRequired }
+        else if !allowed { reason = .notAllowed }
+        else { reason = .writable }
+        self.init(device: adapter, boot: boot, writable: writable, api: api)
+        sharedStatus = VolumeStatus(serial: boot.serial, device: device.bsdName, writable: writable, reason: reason)
+        publishStatus()
     }
     init(device: any YuzuNTFSDeviceAccess, boot: NTFSBootSector, writable: Bool, api: nb_engine) {
         self.device = device
@@ -204,6 +241,14 @@ final class YuzuNTFSVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpe
                 try check(api.nb_mount!(&dev, writable ? 1 : 0, &core))
                 rootRef = api.nb_root_ref!(core)
                 terminalReadOnly = false
+                if var status = sharedStatus {
+                    var actual = nb_stat()
+                    if api.nb_statfs!(core, &actual) != 0 || actual.read_only != 0 {
+                        status.writable = false
+                        if status.reason == .writable { status.reason = .engineError }
+                    }
+                    sharedStatus = status; publishStatus()
+                }
                 do { try publish(rootRef, parent: rootRef) { reply($0, nil) } }
                 catch { discardCore(); throw error }
             }

@@ -16,7 +16,7 @@ if not mount.is_relative_to(root): raise SystemExit('benchmark mountpoint must b
 readonly = os.environ.get('BENCH_READONLY') == '1'
 fstype = os.environ.get('BENCH_FSTYPE', 'yuzuntfs')
 if fstype not in ('yuzuntfs', 'ntfs', 'exfat'): raise SystemExit('unsupported image benchmark driver')
-allow = pathlib.Path.home() / 'Library/Containers/com.bluecoral.vn.yuzuntfs.fsmodule/Data/Library/Application Support/YuzuNTFS/p0-rw-serials.txt'
+allow = pathlib.Path.home() / 'Library/Group Containers/37PX6W22C5.com.bluecoral.vn.yuzuntfs/Library/Application Support/YuzuNTFS/write-serials.txt'
 with image.open('rb') as f: boot = f.read(512)
 serial = f'{int.from_bytes(boot[72:80], "little"):016X}' if boot[3:11] == b'NTFS    ' else None
 expected_signature = b'EXFAT   ' if fstype == 'exfat' else b'NTFS    '
@@ -31,6 +31,7 @@ atexit.register(revoke)
 def authorize():
     if not serial: return
     allow.parent.mkdir(parents=True, exist_ok=True)
+    (allow.parent / 'beta-ack').write_text('acknowledged-v1\n')
     allow.write_text('\n'.join(dict.fromkeys(existing + [serial])) + '\n')
 if __name__ == '__main__':
     sys.path.insert(0, str(root / 'scripts'))
