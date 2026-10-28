@@ -7,6 +7,10 @@
 <p align="center"><b>Use Windows (NTFS) drives on your Mac — just plug in.</b><br>
 macOS 26+ · Apple silicon and Intel (experimental) · <b>Beta 0.1.2</b></p>
 
+<p align="center">
+  <a href="https://www.producthunt.com/products/yuzu-ntfs?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-yuzu-ntfs" target="_blank" rel="noopener noreferrer"><img alt="Yuzu NTFS - Read and write Windows NTFS drives in Finder | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1295377&amp;theme=light&amp;t=1793160801570"></a>
+</p>
+
 ---
 
 Your Mac can open a Windows-formatted drive but can't save anything to it. Yuzu NTFS adds opt-in NTFS writing to macOS, so a backed-up, clean drive can be used in Finder.
